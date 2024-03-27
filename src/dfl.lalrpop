@@ -1,0 +1,94 @@
+use std::str::FromStr;
+use std::rc::Rc;
+use crate::ast::*;
+use fraction::*;
+use im::HashSet;
+
+grammar;
+
+match {
+    r"\s*" => { }, // The default whitespace skipping is disabled if an `ignore pattern` is specified
+    r"//[^\n\r]*[\n\r]*" => { }, // Skip `// comments`
+    r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => { },  // Skip `/* comments */`
+    _
+}
+
+// Expressions
+pub Expr : Rc<Expr> = {
+    <l:Expr> "+" <r:Factor> => Rc::new(Expr::EAdd(l, r)),
+    Factor => <>
+};
+
+pub Factor : Rc<Expr> = {
+    Num => Rc::new(Expr::EInt(<>)),
+    Var => Rc::new(Expr::EVar(<>)),
+    "(" <e:Expr> ")" =>  e
+};
+
+pub Num: u32 = {
+    r"[0-9]+" => u32::from_str(<>).unwrap(),
+};
+
+pub Var: Var = {
+ r"[a-zA-Z][a-zA-Z0-9]*"
+    => Var {  pvar: String::from_str(<>).unwrap() }
+};
+
+pub Chan: Chan = {
+    r"[a-zA-Z][a-zA-Z0-9]*" => Chan (String::from_str(<>).unwrap())
+};
+
+pub ProcName: ProcName = {
+   r"[a-zA-Z][a-zA-Z0-9]*"  => ProcName (String::from_str(<>).unwrap())
+};
+
+pub Location: Location = {
+   r"[a-zA-Z][a-zA-Z0-9]*" => Location (String::from_str(<>).unwrap())
+};
+
+// Procs
+
+pub Proc : Rc<Proc> = {
+    #[precedence(level = "0")] 
+    "0" => Rc::new(Proc::PSkip),
+    "send" <e:Expr> "->" <c:Chan> ";" <k:Proc> => Rc::new(Proc::PSend(c, e, k)),
+    "recv" <x:Var> "<-" <c:Chan> ";" <k:Proc> => Rc::new(Proc::PRecv(c, x, k)),
+    "read" <x:Var> "<-" <l:Location> ";" <k:Proc> => Rc::new(Proc::PRead(l, x, k)),
+    "write" <e:Expr> "->" <l:Location> ";" <k:Proc> => Rc::new(Proc::PWrite(l, e, k)),
+    "debug" ";" <k:Proc> => Rc::new(Proc::PDebug(k)),
+    "(" <p:Proc> ")" => p,
+    ProcName => Rc::new(Proc::PCall(<>)),
+    #[precedence(level = "1")] #[assoc(side="right")]
+    <l:Proc> "||" <r:Proc> => Rc::new(Proc::Par(l, r)), 
+};
+
+pub Permission : Permission = {
+    #[precedence(level = "0")] 
+    <l:Location> "/" <n:Num> => Permission::singleton(&l, Some(Fraction::new(1u32, n))),
+    #[precedence(level = "1")] 
+    <l:Location> => Permission::singleton(&l, None),
+    #[precedence(level = "2")] #[assoc(side="right")]
+    <p1:Permission> "+" <p2:Permission> => p1.add(&p2)
+}
+
+pub ChanList : Vec<Chan> = {
+    <c:Chan> "," <cs:ChanList> => {let mut cs2 = cs.clone(); cs2.push(c); cs2},
+    <c:Chan> => vec![c] 
+}
+
+pub ProcTy : ProcTy = {
+    "{" <i:ChanList> "}" "->" "{" <o:ChanList> "}" =>
+        ProcTy {ins : HashSet::from(i), outs : HashSet::from(o) }
+}
+
+
+// Decl
+pub Decl : Rc<Decl> = {
+    "mutable" <l:Location> => Rc::new(Decl::DeclLoc(l)),
+    "chan" <c:Chan> ":" <p:Permission> => Rc::new(Decl::DeclChan(c, p)),
+    "proc" <p:ProcName> ":" <t:ProcTy> "=" <pr:Proc> => Rc::new(Decl::DeclProc(p,t,pr))
+}
+
+pub Decls : Vec<Rc<Decl>> = {
+    Decl*
+}
