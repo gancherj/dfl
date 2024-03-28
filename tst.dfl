@@ -1,14 +1,19 @@
 mutable l
 
+chan i : 0
 chan c : l
 chan c2 : l/2
 chan c3 : l/2
 
-proc p1 : {c,c3} -> {c2} = 
+proc Inv : {} -> {i} = 
+    send 1 -> i;
+    Inv
+
+proc p1 : {c} -> {c2} = 
     recv x <- c;
     send x -> c2;
-    recv y <- c3;
-    write 1 -> l;
+    // recv y <- c3;
+    read v <- l;
     0
 
 proc p2 : {c2} -> {c3} = 
@@ -18,5 +23,5 @@ proc p2 : {c2} -> {c3} =
     0
 
 
-proc P : {c,c2,c3} -> {c2,c3} = p1 || p2
+proc P : {c,c2} -> {i,c2,c3} = Inv || p1 || p2
 

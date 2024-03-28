@@ -206,9 +206,10 @@ impl Decl {
             },
             Decl::DeclProc(pn, pty, k) => {
                 if !ctx.proc_tys.contains_key(pn) && pty.check(ctx) {
-                    let t = k.check(ctx);
+                    let ctx2 = Ctx{proc_tys: ctx.proc_tys.clone().update(pn.clone(), pty.clone()), ..ctx.clone()};
+                    let t = k.check(&ctx2);
                     if t.clone()?.sub_ty(pty) {
-                        Ok(Ctx{proc_tys: ctx.proc_tys.clone().update(pn.clone(), pty.clone()), ..ctx.clone()})
+                        Ok(ctx2)
                     }
                     else { 
                         let e = format!("Channel subtyping error: got {:?}, expected {:?}", &t, &pty);

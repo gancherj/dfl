@@ -68,16 +68,22 @@ pub Permission : Permission = {
     #[precedence(level = "1")] 
     <l:Location> => Permission::singleton(&l, None),
     #[precedence(level = "2")] #[assoc(side="right")]
-    <p1:Permission> "+" <p2:Permission> => p1.add(&p2)
+    <p1:Permission> "+" <p2:Permission> => p1.add(&p2),
+    "0" => Permission::empty()
 }
 
-pub ChanList : Vec<Chan> = {
-    <c:Chan> "," <cs:ChanList> => {let mut cs2 = cs.clone(); cs2.push(c); cs2},
-    <c:Chan> => vec![c] 
-}
+CommaSep<T>: Vec<T> = { // (1)
+    <mut v:(<T> ",")*> <e:T?> => match e { // (2)
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
 
 pub ProcTy : ProcTy = {
-    "{" <i:ChanList> "}" "->" "{" <o:ChanList> "}" =>
+    "{" <i:CommaSep<Chan>> "}" "->" "{" <o:CommaSep<Chan>> "}" =>
         ProcTy {ins : HashSet::from(i), outs : HashSet::from(o) }
 }
 
