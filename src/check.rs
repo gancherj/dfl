@@ -48,6 +48,7 @@ impl ProcTy {
         }
     }
 
+
     fn check(&self, ctx : &Ctx) -> bool {
         let mut ok = true;
         for c in &self.ins {
@@ -116,6 +117,12 @@ impl Ctx {
             Ok(Ctx{perm:p2, ..self.clone()})
             )
     }
+
+    fn print_vars(&self) {
+        print!("Variables in scope: ");
+        let _ = self.var_tys.iter().for_each(|(x,_)| print!("{} : ()", x));
+        print!("\n")
+    }
 }
 
 impl Expr {
@@ -133,8 +140,8 @@ impl Proc {
         match self {
             Proc::PSkip => Ok(ProcTy::empty()),
             Proc::PDebug(k) => {
-                println!("Current permission: {0:?}", ctx.perm);
-                println!("Current variables: {0:?}", ctx.var_tys);
+                println!("Current permission: {}", ctx.perm);
+                ctx.print_vars();
                 k.check(ctx)
             },
             Proc::PCall(p) => {

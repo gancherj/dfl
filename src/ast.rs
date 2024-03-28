@@ -4,6 +4,7 @@ use fraction::Fraction;
 use im::hashmap::*;
 use im::hashset::*;
 use std::rc::Rc;
+use std::fmt;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct Var {
@@ -53,4 +54,46 @@ pub enum Decl {
     DeclLoc(Location),
     DeclChan(Chan, Permission),
     DeclProc(ProcName, ProcTy, Rc<Proc>)
+}
+
+
+impl fmt::Display for Var {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.pvar)
+    }
+}
+
+impl fmt::Display for Chan {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for ProcName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for Permission {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.iter().try_for_each(|(loc,v)| write!(f, "{} {} ", v, loc))
+    }
+}
+        
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Expr::EVar(v) => v.fmt(f),
+            Expr::EInt(i) => i.fmt(f),
+            Expr::EAdd(e1, e2) => write!(f, "{} + {}", e1, e2)
+        }
+    }
 }
