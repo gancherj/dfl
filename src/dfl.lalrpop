@@ -73,7 +73,6 @@ pub MutReference: MutReference = {
 pub Permission: Permission = {
     #[precedence(level = "0")]
     "empty" => Rc::new(PermissionX::Empty),
-    <v:Var> => Rc::new(PermissionX::Var(v)),
     <f:PermFraction> <r:MutReference> => Rc::new(PermissionX::Fraction(f, r)),
     "(" <p:Permission> ")" => p,
     
@@ -128,13 +127,13 @@ pub Proc: Proc = {
 }
 
 pub Decl: Decl = {
-    "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(MutDecl{ name: n, typ: t }),
+    "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
     "chan" <n:ChanName> ":" <t:PermType> => {
         let n2 = n.0.clone();
-        Decl::Chan(ChanDecl { name: n, typ: PermType { var: Var(n2), base: t.0, perm: t.1 }})
+        Decl::Chan(Rc::new(ChanDeclX { name: n, typ: PermType { var: Var(n2), base: t.0, perm: t.1 }}))
     },
     "proc" <n:ProcName> <params:ProcParams> ":" <t:ProcType> "=" <proc:Proc> =>
-        Decl::Proc(ProcDecl { name: n, params: params, typ: t, body: proc }),
+        Decl::Proc(Rc::new(ProcDeclX { name: n, params: params, typ: t, body: proc })),
 }
 
-pub Decls: Vec<Decl> = { Decl* }
+pub Program: Program = { Decl* => Program { decls: <> } }

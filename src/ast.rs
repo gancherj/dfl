@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::rc::Rc;
 
 use indexmap::IndexMap;
@@ -32,19 +33,18 @@ pub type Permission = Rc<PermissionX>;
 #[derive(Debug)]
 pub enum PermissionX {
     Empty,
-    Var(Var),
     Add(Permission, Permission),
     Ite(Term, Permission, Permission),
     Fraction(PermFraction, MutReference),
 }
 
-#[derive(Debug)]
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum BaseType {
     Bool,
     Int,
 }
 
-#[derive(Debug)]
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum MutType {
     Base(BaseType),
     Array(BaseType),
@@ -98,20 +98,23 @@ pub enum ProcX {
     Debug(Proc),
 }
 
+pub type MutDecl = Rc<MutDeclX>;
 #[derive(Debug)]
-pub struct MutDecl {
+pub struct MutDeclX {
     pub name: MutName,
     pub typ: MutType,
 }
 
+pub type ChanDecl = Rc<ChanDeclX>;
 #[derive(Debug)]
-pub struct ChanDecl {
+pub struct ChanDeclX {
     pub name: ChanName,
     pub typ: PermType,
 }
 
+pub type ProcDecl = Rc<ProcDeclX>;
 #[derive(Debug)]
-pub struct ProcDecl {
+pub struct ProcDeclX {
     pub name: ProcName,
     pub params: ProcParams,
     pub typ: ProcType,
@@ -123,6 +126,10 @@ pub enum Decl {
     Mut(MutDecl),
     Chan(ChanDecl),
     Proc(ProcDecl),
+}
+
+pub struct Program {
+    pub decls: Vec<Decl>,
 }
 
 #[derive(Debug)]
@@ -139,6 +146,33 @@ impl Ctx {
             chans: IndexMap::new(),
             procs: IndexMap::new(),
         }
+    }
+
+    pub fn from(prog: &Program) -> Result<Ctx, String> {
+        let mut ctx = Ctx::new();
+        for decl in &prog.decls {
+            match decl {
+                Decl::Mut(decl) => {
+                    if ctx.muts.contains_key(&decl.name) {
+                        return Err(format!("duplicate mutable declaration {:?}", decl.name));
+                    }
+                    ctx.muts.insert(decl.name.clone(), decl.clone());
+                }
+                Decl::Chan(decl) => {
+                    if ctx.chans.contains_key(&decl.name) {
+                        return Err(format!("duplicate channel declaration {:?}", decl.name));
+                    }
+                    ctx.chans.insert(decl.name.clone(), decl.clone());
+                }
+                Decl::Proc(decl) => {
+                    if ctx.procs.contains_key(&decl.name) {
+                        return Err(format!("duplicate process definition {:?}", decl.name));
+                    }
+                    ctx.procs.insert(decl.name.clone(), decl.clone());
+                }
+            }
+        }
+        Ok(ctx)
     }
 }
 
@@ -187,9 +221,6 @@ impl PermissionX {
     fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
         match self {
             PermissionX::Empty => {}
-            PermissionX::Var(var) => {
-                vars.insert(var.clone());
-            }
             PermissionX::Add(p1, p2) => {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
@@ -199,7 +230,20 @@ impl PermissionX {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }
-            PermissionX::Fraction(..) => {}
+            PermissionX::Fraction(_, mut_ref) => match mut_ref {
+                MutReference::Base(_) => {}
+                MutReference::Index(_, t) => {
+                    t.free_vars_inplace(vars);
+                }
+                MutReference::Slice(_, t1, t2) => {
+                    if let Some(t1) = t1 {
+                        t1.free_vars_inplace(vars);
+                    }
+                    if let Some(t2) = t2 {
+                        t2.free_vars_inplace(vars);
+                    }
+                }
+            },
         }
     }
 
@@ -207,5 +251,29 @@ impl PermissionX {
         let mut vars = HashSet::new();
         self.free_vars_inplace(&mut vars);
         return vars;
+    }
+}
+
+impl fmt::Display for Var {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for MutName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for ChanName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for ProcName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
