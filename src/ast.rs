@@ -22,8 +22,9 @@ pub enum PermFraction {
     Read(u32),
 }
 
+pub type MutReference = Rc<MutReferenceX>;
 #[derive(Debug)]
-pub enum MutReference {
+pub enum MutReferenceX {
     Base(MutName),
     Index(MutName, Term),
     Slice(MutName, Option<Term>, Option<Term>),
@@ -97,8 +98,9 @@ pub struct ChanDeclX {
 }
 
 #[derive(Debug)]
-pub struct ProcParams {
-    pub params: Vec<(Var, BaseType)>,
+pub struct ProcParam {
+    pub name: Var,
+    pub typ: BaseType,
 }
 
 pub type ProcResource = Rc<ProcResourceX>;
@@ -113,7 +115,7 @@ pub type ProcDecl = Rc<ProcDeclX>;
 #[derive(Debug)]
 pub struct ProcDeclX {
     pub name: ProcName,
-    pub params: ProcParams,
+    pub params: Vec<ProcParam>,
     pub res: Vec<ProcResource>,
     pub body: Proc,
 }
@@ -347,29 +349,29 @@ impl PermissionX {
                 }
             }
             PermissionX::Fraction(frac, mut_ref) => {
-                match mut_ref {
-                    MutReference::Base(_) => None,
-                    MutReference::Index(name, term) => {
+                match mut_ref.as_ref() {
+                    MutReferenceX::Base(_) => None,
+                    MutReferenceX::Index(name, term) => {
                         let term_subst = TermX::substitute_inplace(term, subst);
                         if term_subst.is_some() {
                             Some(Rc::new(PermissionX::Fraction(
                                 *frac,
-                                MutReference::Index(name.clone(), term_subst.unwrap()),
+                                Rc::new(MutReferenceX::Index(name.clone(), term_subst.unwrap())),
                             )))
                         } else {
                             None
                         }
                     },
-                    MutReference::Slice(name, t1, t2) => {
+                    MutReferenceX::Slice(name, t1, t2) => {
                         let t1_subst = t1.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
                         let t2_subst = t2.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
                         if t1_subst.is_some() || t2_subst.is_some() {
                             Some(Rc::new(PermissionX::Fraction(
                                 *frac,
-                                MutReference::Slice(name.clone(),
+                                Rc::new(MutReferenceX::Slice(name.clone(),
                                     if t1.is_some() { Some(t1_subst.unwrap_or(t1.as_ref().unwrap().clone())) } else { None },
                                     if t2.is_some() { Some(t2_subst.unwrap_or(t2.as_ref().unwrap().clone())) } else { None },
-                                ),
+                                )),
                             )))
                         } else {
                             None
@@ -405,12 +407,12 @@ impl PermissionX {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }
-            PermissionX::Fraction(_, mut_ref) => match mut_ref {
-                MutReference::Base(_) => {}
-                MutReference::Index(_, t) => {
+            PermissionX::Fraction(_, mut_ref) => match mut_ref.as_ref() {
+                MutReferenceX::Base(_) => {}
+                MutReferenceX::Index(_, t) => {
                     t.free_vars_inplace(vars);
                 }
-                MutReference::Slice(_, t1, t2) => {
+                MutReferenceX::Slice(_, t1, t2) => {
                     if let Some(t1) = t1 {
                         t1.free_vars_inplace(vars);
                     }
@@ -450,5 +452,23 @@ impl fmt::Display for ChanName {
 impl fmt::Display for ProcName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for BaseType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BaseType::Bool => write!(f, "bool"),
+            BaseType::Int => write!(f, "int"),
+        }
+    }
+}
+
+impl fmt::Display for MutType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MutType::Base(base) => write!(f, "{}", base),
+            MutType::Array(base) => write!(f, "[{}]", base),
+        }
     }
 }

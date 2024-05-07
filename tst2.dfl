@@ -1,14 +1,16 @@
 mut A: [int]
 
-chan i: int | read A[i] + empty + write A
+chan i: int | read A[i]
 chan j: bool | if j then empty else empty end
 
-proc p (a: int) (b: int) | write A[a + b], read A, input i, input j, output i =
-    // recv x <- i;
-    if a < 0 then
-        p a
-    else
-        p a
-    end
+// proc p (a: int) (b: int) | write A[a + b], read A, input i, input j, output i =
+//     // recv x <- i;
+//     if a < 0 then
+//         p a
+//     else
+//         p a
+//     end
 
-proc q = p 1 || q 1
+proc p | input i =
+    recv x <- i;
+    read y <- A[0]

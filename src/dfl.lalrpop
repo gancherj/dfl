@@ -29,12 +29,8 @@ pub ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(String::from_s
 pub ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(String::from_str(<>).unwrap()) }
 pub MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(String::from_str(<>).unwrap()) }
 
-pub ProcParam: (Var, BaseType) = {
-    "(" <v:Var> ":" <t:BaseType> ")" => (v, t),
-}
-
-pub ProcParams: ProcParams = {
-    ProcParam* => ProcParams { params: <> },
+pub ProcParam: ProcParam = {
+    "(" <v:Var> ":" <t:BaseType> ")" => ProcParam { name: v, typ: t },
 }
 
 pub BaseType: BaseType = {
@@ -53,9 +49,9 @@ pub PermFraction: PermFraction = {
 }
 
 pub MutReference: MutReference = {
-    MutName => MutReference::Base(<>),
-    <n:MutName> "[" <t:Term> "]" => MutReference::Index(n, t),
-    <n:MutName> "[" <t1:Term?> ".." <t2:Term?> "]" => MutReference::Slice(n, t1, t2),
+    MutName => Rc::new(MutReferenceX::Base(<>)),
+    <n:MutName> "[" <t:Term> "]" => Rc::new(MutReferenceX::Index(n, t)),
+    <n:MutName> "[" <t1:Term?> ".." <t2:Term?> "]" => Rc::new(MutReferenceX::Slice(n, t1, t2)),
 }
 
 pub Permission: Permission = {
@@ -106,9 +102,18 @@ pub Proc: Proc = {
     "recv" <x:Var> "<-" <c:ChanName> ";" <k:Proc> => Rc::new(ProcX::Recv(c, x, k)),
     "write" <t:Term> "->" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Write(m, t, k)),
     "read" <x:Var> "<-" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Read(m, x, k)),
+    "debug" ";" <k:Proc> => Rc::new(ProcX::Debug(k)),
     "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" => Rc::new(ProcX::Ite(t, k1, k2)),
     <p:ProcName> <args:Term*> => Rc::new(ProcX::Call(p, args)),
     "(" <p:Proc> ")" => p,
+
+    // Some abbreviations
+    "send" <t:Term> "->" <c:ChanName> => Rc::new(ProcX::Send(c, t, Rc::new(ProcX::Skip))),
+    "recv" <x:Var> "<-" <c:ChanName> => Rc::new(ProcX::Recv(c, x, Rc::new(ProcX::Skip))),
+    "write" <t:Term> "->" <m:MutReference> => Rc::new(ProcX::Write(m, t, Rc::new(ProcX::Skip))),
+    "read" <x:Var> "<-" <m:MutReference> => Rc::new(ProcX::Read(m, x, Rc::new(ProcX::Skip))),
+    "debug" => Rc::new(ProcX::Debug(Rc::new(ProcX::Skip))),
+    "if" <t:Term> "then" <k:Proc> "end" => Rc::new(ProcX::Ite(t, k, Rc::new(ProcX::Skip))),
     
     #[precedence(level = "1")]
     #[assoc(side="right")]
@@ -125,9 +130,9 @@ pub Decl: Decl = {
     "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
     "chan" <n:ChanName> ":" <t:BaseType> "|" <p:Permission> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: p })),
-    "proc" <n:ProcName> <p:ProcParams> "|" <r:CommaSep<ProcResource>> "=" <b:Proc> =>
+    "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" <r:CommaSep<ProcResource>> "=" <b:Proc> =>
         Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: r, body: b })),
-    "proc" <n:ProcName> <p:ProcParams> "=" <b:Proc> =>
+    "proc" <n:ProcName> <p:CommaSep<ProcParam>> "=" <b:Proc> =>
         Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: Vec::new(), body: b })),
 }
 
