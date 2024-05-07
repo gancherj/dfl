@@ -3,9 +3,7 @@ use std::fs;
 
 pub mod ast;
 pub mod check;
-// pub mod check;
-// pub mod permissions;
-// use crate::check::*;
+pub mod permission;
 
 use crate::ast::*;
 

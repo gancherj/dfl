@@ -16,7 +16,7 @@ pub struct ProcName(pub String);
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct Var(pub String);
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum PermFraction {
     Write,
     Read(u32),
@@ -34,6 +34,7 @@ pub type Permission = Rc<PermissionX>;
 pub enum PermissionX {
     Empty,
     Add(Permission, Permission),
+    Sub(Permission, Permission),
     Ite(Term, Permission, Permission),
     Fraction(PermFraction, MutReference),
 }
@@ -48,24 +49,6 @@ pub enum BaseType {
 pub enum MutType {
     Base(BaseType),
     Array(BaseType),
-}
-
-#[derive(Debug)]
-pub struct PermType {
-    pub var: Var,
-    pub base: BaseType,
-    pub perm: Permission,
-}
-
-#[derive(Debug)]
-pub struct ProcType {
-    pub ins: Vec<ChanName>,
-    pub outs: Vec<ChanName>,
-}
-
-#[derive(Debug)]
-pub struct ProcParams {
-    pub params: Vec<(Var, MutType)>,
 }
 
 pub type Term = Rc<TermX>;
@@ -109,7 +92,21 @@ pub type ChanDecl = Rc<ChanDeclX>;
 #[derive(Debug)]
 pub struct ChanDeclX {
     pub name: ChanName,
-    pub typ: PermType,
+    pub typ: BaseType,
+    pub perm: Permission,
+}
+
+#[derive(Debug)]
+pub struct ProcParams {
+    pub params: Vec<(Var, BaseType)>,
+}
+
+pub type ProcResource = Rc<ProcResourceX>;
+#[derive(Debug)]
+pub enum ProcResourceX {
+    Perm(Permission),
+    Input(ChanName),
+    Output(ChanName),
 }
 
 pub type ProcDecl = Rc<ProcDeclX>;
@@ -117,7 +114,7 @@ pub type ProcDecl = Rc<ProcDeclX>;
 pub struct ProcDeclX {
     pub name: ProcName,
     pub params: ProcParams,
-    pub typ: ProcType,
+    pub res: Vec<ProcResource>,
     pub body: Proc,
 }
 
@@ -137,6 +134,12 @@ pub struct Ctx {
     pub muts: IndexMap<MutName, MutDecl>,
     pub chans: IndexMap<ChanName, ChanDecl>,
     pub procs: IndexMap<ProcName, ProcDecl>,
+}
+
+impl From<&ChanName> for Var {
+    fn from(value: &ChanName) -> Var {
+        Var(value.0.clone())
+    }
 }
 
 impl Ctx {
@@ -177,6 +180,86 @@ impl Ctx {
 }
 
 impl TermX {
+    /// Returns Some if the term is substituted, None if unchanged
+    fn substitute_inplace(term: &Term, subst: &IndexMap<Var, Term>) -> Option<Term> {
+        match term.as_ref() {
+            TermX::Var(var) => Some(subst.get(var)?.clone()),
+            TermX::Bool(_) => None,
+            TermX::Int(_) => None,
+            TermX::Add(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(TermX::Add(
+                        t1_subst.unwrap_or(t1.clone()),
+                        t2_subst.unwrap_or(t2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            TermX::Mul(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(TermX::Mul(
+                        t1_subst.unwrap_or(t1.clone()),
+                        t2_subst.unwrap_or(t2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            TermX::And(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(TermX::And(
+                        t1_subst.unwrap_or(t1.clone()),
+                        t2_subst.unwrap_or(t2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            TermX::Less(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(TermX::Less(
+                        t1_subst.unwrap_or(t1.clone()),
+                        t2_subst.unwrap_or(t2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            TermX::Equal(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(TermX::Equal(
+                        t1_subst.unwrap_or(t1.clone()),
+                        t2_subst.unwrap_or(t2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            TermX::Not(t) => Self::substitute_inplace(t, subst).map(|t| Rc::new(TermX::Not(t))),
+        }
+    }
+
+    /// Substitutes into a term without modifying unchanged subtrees
+    pub fn substitute(term: &Term, subst: &IndexMap<Var, Term>) -> Term {
+        Self::substitute_inplace(term, subst).unwrap_or(term.clone())
+    }
+
     fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
         match self {
             TermX::Var(var) => {
@@ -218,10 +301,102 @@ impl TermX {
 }
 
 impl PermissionX {
+    /// Returns Some if the term is substituted, None if unchanged
+    fn substitute_inplace(perm: &Permission, subst: &IndexMap<Var, Term>) -> Option<Permission> {
+        match perm.as_ref() {
+            PermissionX::Empty => None,
+            PermissionX::Add(p1, p2) => {
+                let p1_subst = Self::substitute_inplace(p1, subst);
+                let p2_subst = Self::substitute_inplace(p2, subst);
+
+                if p1_subst.is_some() || p2_subst.is_some() {
+                    Some(Rc::new(PermissionX::Add(
+                        p1_subst.unwrap_or(p1.clone()),
+                        p2_subst.unwrap_or(p2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            PermissionX::Sub(p1, p2) => {
+                let p1_subst = Self::substitute_inplace(p1, subst);
+                let p2_subst = Self::substitute_inplace(p2, subst);
+
+                if p1_subst.is_some() || p2_subst.is_some() {
+                    Some(Rc::new(PermissionX::Sub(
+                        p1_subst.unwrap_or(p1.clone()),
+                        p2_subst.unwrap_or(p2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            PermissionX::Ite(t, p1, p2) => {
+                let t_subst = TermX::substitute_inplace(t, subst);
+                let p1_subst = Self::substitute_inplace(p1, subst);
+                let p2_subst = Self::substitute_inplace(p2, subst);
+
+                if t_subst.is_some() || p1_subst.is_some() || p2_subst.is_some() {
+                    Some(Rc::new(PermissionX::Ite(
+                        t_subst.unwrap_or(t.clone()),
+                        p1_subst.unwrap_or(p1.clone()),
+                        p2_subst.unwrap_or(p2.clone()),
+                    )))
+                } else {
+                    None
+                }
+            }
+            PermissionX::Fraction(frac, mut_ref) => {
+                match mut_ref {
+                    MutReference::Base(_) => None,
+                    MutReference::Index(name, term) => {
+                        let term_subst = TermX::substitute_inplace(term, subst);
+                        if term_subst.is_some() {
+                            Some(Rc::new(PermissionX::Fraction(
+                                *frac,
+                                MutReference::Index(name.clone(), term_subst.unwrap()),
+                            )))
+                        } else {
+                            None
+                        }
+                    },
+                    MutReference::Slice(name, t1, t2) => {
+                        let t1_subst = t1.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
+                        let t2_subst = t2.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
+                        if t1_subst.is_some() || t2_subst.is_some() {
+                            Some(Rc::new(PermissionX::Fraction(
+                                *frac,
+                                MutReference::Slice(name.clone(),
+                                    if t1.is_some() { Some(t1_subst.unwrap_or(t1.as_ref().unwrap().clone())) } else { None },
+                                    if t2.is_some() { Some(t2_subst.unwrap_or(t2.as_ref().unwrap().clone())) } else { None },
+                                ),
+                            )))
+                        } else {
+                            None
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    /// Substitutes into a permission without modifying unchanged subtrees
+    pub fn substitute(perm: &Permission, subst: &IndexMap<Var, Term>) -> Permission {
+        Self::substitute_inplace(perm, subst).unwrap_or(perm.clone())
+    }
+
+    pub fn substitute_one(perm: &Permission, var: &Var, subterm: &Term) -> Permission {
+        PermissionX::substitute(perm, &IndexMap::from([ (var.clone(), subterm.clone()) ]))
+    }
+
     fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
         match self {
             PermissionX::Empty => {}
             PermissionX::Add(p1, p2) => {
+                p1.free_vars_inplace(vars);
+                p2.free_vars_inplace(vars);
+            }
+            PermissionX::Sub(p1, p2) => {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }

@@ -1,9 +1,9 @@
-mut a: [int]
+mut A: [int]
 
-chan i: int | read a[i] + empty + write a
+chan i: int | read A[i] + empty + write A
 chan j: bool | if j then empty else empty end
 
-proc p (a: int): { i, j } -> { i } =
+proc p (a: int) (b: int) | write A[a + b], read A, input i, input j, output i =
     // recv x <- i;
     if a < 0 then
         p a
@@ -11,4 +11,4 @@ proc p (a: int): { i, j } -> { i } =
         p a
     end
 
-proc q: {} -> {} = p 1 || q 1
+proc q = p 1 || q 1
