@@ -1,0 +1,14 @@
+mut a: [int]
+
+chan i: int | read a[i] + empty + write a
+chan j: bool | if j then empty else empty end
+
+proc p (a: int): { i, j } -> { i } =
+    // recv x <- i;
+    if a < 0 then
+        p a
+    else
+        p a
+    end
+
+proc q: {} -> {} = p 1 || q 1

@@ -1,99 +1,211 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
-use fraction::Fraction;
-use im::hashmap::*;
-use im::hashset::*;
+use std::collections::HashSet;
 use std::rc::Rc;
-use std::fmt;
+
+use indexmap::IndexMap;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Var {
-    pub pvar: String
-    // ident: u32,
-}
+pub struct MutName(pub String);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Chan(pub String);
-
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Location(pub String);
+pub struct ChanName(pub String);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct ProcName(pub String);
 
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct Var(pub String);
+
 #[derive(Debug)]
-pub enum Expr {
-    EVar(Var),
-    EInt(u32),
-    EAdd(Rc<Expr>, Rc<Expr>),
+pub enum PermFraction {
+    Write,
+    Read(u32),
 }
 
 #[derive(Debug)]
-pub enum Proc {
-    PDebug(Rc<Proc>),
-    PSend(Chan, Rc<Expr>, Rc<Proc>),
-    PRecv(Chan, Var, Rc<Proc>),
-    PWrite(Location, Rc<Expr>, Rc<Proc>),
-    PRead(Location, Var, Rc<Proc>),
-    PCall(ProcName),
-    Par(Rc<Proc>, Rc<Proc>),
-    PSkip,
+pub enum MutReference {
+    Base(MutName),
+    Index(MutName, Term),
+    Slice(MutName, Option<Term>, Option<Term>),
 }
 
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub struct Permission(pub HashMap<Location, Fraction>);
+pub type Permission = Rc<PermissionX>;
+#[derive(Debug)]
+pub enum PermissionX {
+    Empty,
+    Var(Var),
+    Add(Permission, Permission),
+    Ite(Term, Permission, Permission),
+    Fraction(PermFraction, MutReference),
+}
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ProcTy {
-    pub ins: HashSet<Chan>,
-    pub outs: HashSet<Chan>,
+#[derive(Debug)]
+pub enum BaseType {
+    Bool,
+    Int,
+}
+
+#[derive(Debug)]
+pub enum MutType {
+    Base(BaseType),
+    Array(BaseType),
+}
+
+#[derive(Debug)]
+pub struct PermType {
+    pub var: Var,
+    pub base: BaseType,
+    pub perm: Permission,
+}
+
+#[derive(Debug)]
+pub struct ProcType {
+    pub ins: Vec<ChanName>,
+    pub outs: Vec<ChanName>,
+}
+
+#[derive(Debug)]
+pub struct ProcParams {
+    pub params: Vec<(Var, MutType)>,
+}
+
+pub type Term = Rc<TermX>;
+#[derive(Debug)]
+pub enum TermX {
+    Var(Var),
+    Bool(bool),
+    Int(i32),
+
+    Add(Term, Term),
+    Mul(Term, Term),
+
+    And(Term, Term),
+    Less(Term, Term),
+    Equal(Term, Term),
+    Not(Term),
+}
+
+pub type Proc = Rc<ProcX>;
+#[derive(Debug)]
+pub enum ProcX {
+    Skip,
+    Send(ChanName, Term, Proc),
+    Recv(ChanName, Var, Proc),
+    Write(MutReference, Term, Proc),
+    Read(MutReference, Var, Proc),
+    Ite(Term, Proc, Proc),
+    Call(ProcName, Vec<Term>),
+    Par(Proc, Proc),
+    Debug(Proc),
+}
+
+#[derive(Debug)]
+pub struct MutDecl {
+    pub name: MutName,
+    pub typ: MutType,
+}
+
+#[derive(Debug)]
+pub struct ChanDecl {
+    pub name: ChanName,
+    pub typ: PermType,
+}
+
+#[derive(Debug)]
+pub struct ProcDecl {
+    pub name: ProcName,
+    pub params: ProcParams,
+    pub typ: ProcType,
+    pub body: Proc,
 }
 
 #[derive(Debug)]
 pub enum Decl {
-    DeclLoc(Location),
-    DeclChan(Chan, Permission),
-    DeclProc(ProcName, ProcTy, Rc<Proc>)
+    Mut(MutDecl),
+    Chan(ChanDecl),
+    Proc(ProcDecl),
 }
 
-
-impl fmt::Display for Var {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.pvar)
-    }
+#[derive(Debug)]
+pub struct Ctx {
+    pub muts: IndexMap<MutName, MutDecl>,
+    pub chans: IndexMap<ChanName, ChanDecl>,
+    pub procs: IndexMap<ProcName, ProcDecl>,
 }
 
-impl fmt::Display for Chan {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for Location {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for ProcName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for Permission {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.iter().try_for_each(|(loc,v)| write!(f, "{} {} ", v, loc))
-    }
-}
-        
-
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Expr::EVar(v) => v.fmt(f),
-            Expr::EInt(i) => i.fmt(f),
-            Expr::EAdd(e1, e2) => write!(f, "{} + {}", e1, e2)
+impl Ctx {
+    pub fn new() -> Ctx {
+        Ctx {
+            muts: IndexMap::new(),
+            chans: IndexMap::new(),
+            procs: IndexMap::new(),
         }
+    }
+}
+
+impl TermX {
+    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+        match self {
+            TermX::Var(var) => {
+                vars.insert(var.clone());
+            }
+            TermX::Bool(_) => {}
+            TermX::Int(_) => {}
+            TermX::Add(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::Mul(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::And(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::Less(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::Equal(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::Not(t) => {
+                t.free_vars_inplace(vars);
+            }
+        }
+    }
+
+    pub fn free_vars(&self) -> HashSet<Var> {
+        let mut vars = HashSet::new();
+        self.free_vars_inplace(&mut vars);
+        return vars;
+    }
+}
+
+impl PermissionX {
+    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+        match self {
+            PermissionX::Empty => {}
+            PermissionX::Var(var) => {
+                vars.insert(var.clone());
+            }
+            PermissionX::Add(p1, p2) => {
+                p1.free_vars_inplace(vars);
+                p2.free_vars_inplace(vars);
+            }
+            PermissionX::Ite(t, p1, p2) => {
+                t.free_vars_inplace(vars);
+                p1.free_vars_inplace(vars);
+                p2.free_vars_inplace(vars);
+            }
+            PermissionX::Fraction(..) => {}
+        }
+    }
+
+    pub fn free_vars(&self) -> HashSet<Var> {
+        let mut vars = HashSet::new();
+        self.free_vars_inplace(&mut vars);
+        return vars;
     }
 }

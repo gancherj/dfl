@@ -1,100 +1,140 @@
 use std::str::FromStr;
 use std::rc::Rc;
+
 use crate::ast::*;
-use fraction::*;
-use im::HashSet;
 
 grammar;
 
 match {
-    r"\s*" => { }, // The default whitespace skipping is disabled if an `ignore pattern` is specified
-    r"//[^\n\r]*[\n\r]*" => { }, // Skip `// comments`
-    r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => { },  // Skip `/* comments */`
+    r"\s*" => {}, // The default whitespace skipping is disabled if an `ignore pattern` is specified
+    r"//[^\n\r]*[\n\r]*" => {}, // Skip `// comments`
+    r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => {},  // Skip `/* comments */`
     _
 }
 
-// Expressions
-pub Expr : Rc<Expr> = {
-    <l:Expr> "+" <r:Factor> => Rc::new(Expr::EAdd(l, r)),
-    Factor => <>
-};
-
-pub Factor : Rc<Expr> = {
-    Num => Rc::new(Expr::EInt(<>)),
-    Var => Rc::new(Expr::EVar(<>)),
-    "(" <e:Expr> ")" =>  e
-};
-
-pub Num: u32 = {
-    r"[0-9]+" => u32::from_str(<>).unwrap(),
-};
-
-pub Var: Var = {
- r"[a-zA-Z][a-zA-Z0-9]*"
-    => Var {  pvar: String::from_str(<>).unwrap() }
-};
-
-pub Chan: Chan = {
-    r"[a-zA-Z][a-zA-Z0-9]*" => Chan (String::from_str(<>).unwrap())
-};
-
-pub ProcName: ProcName = {
-   r"[a-zA-Z][a-zA-Z0-9]*"  => ProcName (String::from_str(<>).unwrap())
-};
-
-pub Location: Location = {
-   r"[a-zA-Z][a-zA-Z0-9]*" => Location (String::from_str(<>).unwrap())
-};
-
-// Procs
-
-pub Proc : Rc<Proc> = {
-    #[precedence(level = "0")] 
-    "0" => Rc::new(Proc::PSkip),
-    "send" <e:Expr> "->" <c:Chan> ";" <k:Proc> => Rc::new(Proc::PSend(c, e, k)),
-    "recv" <x:Var> "<-" <c:Chan> ";" <k:Proc> => Rc::new(Proc::PRecv(c, x, k)),
-    "read" <x:Var> "<-" <l:Location> ";" <k:Proc> => Rc::new(Proc::PRead(l, x, k)),
-    "write" <e:Expr> "->" <l:Location> ";" <k:Proc> => Rc::new(Proc::PWrite(l, e, k)),
-    "debug" ";" <k:Proc> => Rc::new(Proc::PDebug(k)),
-    "(" <p:Proc> ")" => p,
-    ProcName => Rc::new(Proc::PCall(<>)),
-    #[precedence(level = "1")] #[assoc(side="right")]
-    <l:Proc> "||" <r:Proc> => Rc::new(Proc::Par(l, r)), 
-};
-
-pub Permission : Permission = {
-    #[precedence(level = "0")] 
-    <l:Location> "/" <n:Num> => Permission::singleton(&l, Some(Fraction::new(1u32, n))),
-    #[precedence(level = "1")] 
-    <l:Location> => Permission::singleton(&l, None),
-    #[precedence(level = "2")] #[assoc(side="right")]
-    <p1:Permission> "+" <p2:Permission> => p1.add(&p2),
-    "0" => Permission::empty()
-}
-
-CommaSep<T>: Vec<T> = { // (1)
-    <mut v:(<T> ",")*> <e:T?> => match e { // (2)
+CommaSep<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
         None => v,
         Some(e) => {
             v.push(e);
             v
         }
     }
-};
-
-pub ProcTy : ProcTy = {
-    "{" <i:CommaSep<Chan>> "}" "->" "{" <o:CommaSep<Chan>> "}" =>
-        ProcTy {ins : HashSet::from(i), outs : HashSet::from(o) }
 }
 
+pub Bool: bool = { "false" => false, "true" => true }
+pub Int: i32 = { r"0|-?[1-9][0-9]*" => i32::from_str(<>).unwrap() }
+pub Var: Var = { r"[a-zA-Z][a-zA-Z0-9]*" => Var(String::from_str(<>).unwrap()) }
+pub ChanName: ChanName = { r"[a-zA-Z][a-zA-Z0-9]*" => ChanName(String::from_str(<>).unwrap()) }
+pub ProcName: ProcName = { r"[a-zA-Z][a-zA-Z0-9]*"  => ProcName(String::from_str(<>).unwrap()) }
+pub MutName: MutName = { r"[a-zA-Z][a-zA-Z0-9]*" => MutName(String::from_str(<>).unwrap()) }
 
-// Decl
-pub Decl : Rc<Decl> = {
-    "mutable" <l:Location> => Rc::new(Decl::DeclLoc(l)),
-    "chan" <c:Chan> ":" <p:Permission> => Rc::new(Decl::DeclChan(c, p)),
-    "proc" <p:ProcName> ":" <t:ProcTy> "=" <pr:Proc> => Rc::new(Decl::DeclProc(p,t,pr))
+pub ProcParam: (Var, MutType) = {
+    "(" <v:Var> ":" <t:MutType> ")" => (v, t),
 }
 
-pub Decls : Vec<Rc<Decl>> = {
-    Decl*
+pub ProcParams: ProcParams = {
+    ProcParam* => ProcParams { params: <> },
 }
+
+pub ProcType: ProcType = {
+    "{" <i:CommaSep<ChanName>> "}" "->" "{" <o:CommaSep<ChanName>> "}" =>
+        ProcType {
+            ins: i,
+            outs: o,
+        }
+}
+
+pub BaseType: BaseType = {
+    "bool" => BaseType::Bool,
+    "int" => BaseType::Int,
+}
+
+pub MutType: MutType = {
+    <t:BaseType> => MutType::Base(t),
+    "[" <t:BaseType> "]" => MutType::Array(t),
+}
+
+pub PermType: (BaseType, Permission) = {
+    <t:BaseType> "|" <p:Permission> => (t, p),
+}
+
+pub PermFraction: PermFraction = {
+    "write" => PermFraction::Write,
+    "read" => PermFraction::Read(0),
+}
+
+pub MutReference: MutReference = {
+    MutName => MutReference::Base(<>),
+    <n:MutName> "[" <t:Term> "]" => MutReference::Index(n, t),
+    <n:MutName> "[" <t1:Term?> ".." <t2:Term?> "]" => MutReference::Slice(n, t1, t2),
+}
+
+pub Permission: Permission = {
+    #[precedence(level = "0")]
+    "empty" => Rc::new(PermissionX::Empty),
+    <v:Var> => Rc::new(PermissionX::Var(v)),
+    <f:PermFraction> <r:MutReference> => Rc::new(PermissionX::Fraction(f, r)),
+    "(" <p:Permission> ")" => p,
+    
+    "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" => Rc::new(PermissionX::Ite(t, p1, p2)),
+
+    #[precedence(level = "1")]
+    #[assoc(side="left")]
+    <p1:Permission> "+" <p2:Permission> => Rc::new(PermissionX::Add(p1, p2)),
+}
+
+pub Term: Term = {
+    #[precedence(level = "0")]
+    Var => Rc::new(TermX::Var(<>)),
+    Bool => Rc::new(TermX::Bool(<>)),
+    Int => Rc::new(TermX::Int(<>)),
+
+    #[precedence(level = "1")]
+    #[assoc(side="left")]
+    <t1:Term> "*" <t2:Term> => Rc::new(TermX::Add(t1, t2)),
+
+    #[precedence(level = "2")]
+    #[assoc(side="left")]
+    <t1:Term> "+" <t2:Term> => Rc::new(TermX::Mul(t1, t2)),
+
+    #[precedence(level = "3")]
+    #[assoc(side="left")]
+    <t1:Term> "<" <t2:Term> => Rc::new(TermX::Less(t1, t2)),
+    #[assoc(side="left")]
+    <t1:Term> "=" <t2:Term> => Rc::new(TermX::Equal(t1, t2)),
+
+    #[precedence(level = "4")]
+    "not" <t:Term> => Rc::new(TermX::Not(t)),
+    
+    #[precedence(level = "5")]
+    #[assoc(side="left")]
+    <t1:Term> "and" <t2:Term> => Rc::new(TermX::And(t1, t2)),
+}
+
+pub Proc: Proc = {
+    #[precedence(level = "0")]
+    "skip" => Rc::new(ProcX::Skip),
+    "send" <t:Term> "->" <c:ChanName> ";" <k:Proc> => Rc::new(ProcX::Send(c, t, k)),
+    "recv" <x:Var> "<-" <c:ChanName> ";" <k:Proc> => Rc::new(ProcX::Recv(c, x, k)),
+    "write" <t:Term> "->" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Write(m, t, k)),
+    "read" <x:Var> "<-" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Read(m, x, k)),
+    "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" => Rc::new(ProcX::Ite(t, k1, k2)),
+    <p:ProcName> <args:Term*> => Rc::new(ProcX::Call(p, args)),
+    
+    #[precedence(level = "1")]
+    #[assoc(side="right")]
+    <k1:Proc> "||" <k2:Proc> => Rc::new(ProcX::Par(k1, k2)),
+}
+
+pub Decl: Decl = {
+    "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(MutDecl{ name: n, typ: t }),
+    "chan" <n:ChanName> ":" <t:PermType> => {
+        let n2 = n.0.clone();
+        Decl::Chan(ChanDecl { name: n, typ: PermType { var: Var(n2), base: t.0, perm: t.1 }})
+    },
+    "proc" <n:ProcName> <params:ProcParams> ":" <t:ProcType> "=" <proc:Proc> =>
+        Decl::Proc(ProcDecl { name: n, params: params, typ: t, body: proc }),
+}
+
+pub Decls: Vec<Decl> = { Decl* }
