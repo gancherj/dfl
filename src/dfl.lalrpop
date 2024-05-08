@@ -98,23 +98,18 @@ pub Term: Term = {
 pub Proc: Proc = {
     #[precedence(level = "0")]
     "skip" => Rc::new(ProcX::Skip),
-    "send" <t:Term> "->" <c:ChanName> ";" <k:Proc> => Rc::new(ProcX::Send(c, t, k)),
-    "recv" <x:Var> "<-" <c:ChanName> ";" <k:Proc> => Rc::new(ProcX::Recv(c, x, k)),
-    "write" <t:Term> "->" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Write(m, t, k)),
-    "read" <x:Var> "<-" <m:MutReference> ";" <k:Proc> => Rc::new(ProcX::Read(m, x, k)),
-    "debug" ";" <k:Proc> => Rc::new(ProcX::Debug(k)),
+    "send" <t:Term> "->" <c:ChanName> <k:Proc?> => Rc::new(ProcX::Send(c, t, k.unwrap_or(Rc::new(ProcX::Skip)))),
+    "recv" <x:Var> "<-" <c:ChanName> <k:Proc?> => Rc::new(ProcX::Recv(c, x, k.unwrap_or(Rc::new(ProcX::Skip)))),
+    "write" <t:Term> "->" <m:MutReference> <k:Proc?> => Rc::new(ProcX::Write(m, t, k.unwrap_or(Rc::new(ProcX::Skip)))),
+    "read" <x:Var> "<-" <m:MutReference> <k:Proc?> => Rc::new(ProcX::Read(m, x, k.unwrap_or(Rc::new(ProcX::Skip)))),
+    "debug" <k:Proc?> => Rc::new(ProcX::Debug(k.unwrap_or(Rc::new(ProcX::Skip)))),
+
     "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" => Rc::new(ProcX::Ite(t, k1, k2)),
+    "if" <t:Term> "then" <k:Proc> "end" => Rc::new(ProcX::Ite(t, k, Rc::new(ProcX::Skip))),
     <p:ProcName> <args:Term*> => Rc::new(ProcX::Call(p, args)),
+    
     "(" <p:Proc> ")" => p,
 
-    // Some abbreviations
-    "send" <t:Term> "->" <c:ChanName> => Rc::new(ProcX::Send(c, t, Rc::new(ProcX::Skip))),
-    "recv" <x:Var> "<-" <c:ChanName> => Rc::new(ProcX::Recv(c, x, Rc::new(ProcX::Skip))),
-    "write" <t:Term> "->" <m:MutReference> => Rc::new(ProcX::Write(m, t, Rc::new(ProcX::Skip))),
-    "read" <x:Var> "<-" <m:MutReference> => Rc::new(ProcX::Read(m, x, Rc::new(ProcX::Skip))),
-    "debug" => Rc::new(ProcX::Debug(Rc::new(ProcX::Skip))),
-    "if" <t:Term> "then" <k:Proc> "end" => Rc::new(ProcX::Ite(t, k, Rc::new(ProcX::Skip))),
-    
     #[precedence(level = "1")]
     #[assoc(side="right")]
     <k1:Proc> "||" <k2:Proc> => Rc::new(ProcX::Par(k1, k2)),

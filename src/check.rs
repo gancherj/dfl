@@ -267,49 +267,62 @@ impl ProcX {
                 k1.type_check_inplace(ctx, local, rctx, constraints)
                     .and(k2.type_check_inplace(ctx, &mut local_copy, &mut res_copy, constraints))
             }
-            ProcX::Call(name, args) => {
-                let proc_decl = ctx.procs.get(name).ok_or(format!("process `{}` does not exist", name))?;
 
-                // Check argument types are correct
-                if args.len() != proc_decl.params.len() {
-                    return Err(format!("mismatched number of arguments"));
-                }
+            // P <args> has the same typing rules as P <args> || skip
+            ProcX::Call(name, args) =>
+                Rc::new(ProcX::Par(Rc::new(ProcX::Call(name.clone(), args.clone())), Rc::new(ProcX::Skip))).type_check_inplace(ctx, local, rctx, constraints),
 
-                let mut subst = IndexMap::new();
-
-                for (arg, param) in args.iter().zip(&proc_decl.params) {
-                    if arg.type_check(local)? != param.typ {
-                        return Err(format!("unmatched argument type"));
-                    }
-                    subst.insert(param.name.clone(), arg.clone());
-                }
-
-                // Check sufficient resources are provided
-                for res in &proc_decl.res {
-                    match res.as_ref() {
-                        ProcResourceX::Perm(p) => {
-                            // Should have enough resource to call the process
-                            let p_subst = PermissionX::substitute(p, &subst);
-                            constraints.push(Rc::new(PermConstraintX::LessEq(p_subst, rctx.perm.clone())));
-                        },
-                        // Check that input/output channels are within the resource context
-                        ProcResourceX::Input(name) =>
-                            if !rctx.ins.contains(name) {
-                                return Err(format!("required resource `input {}` not present at call site", name))
-                            }
-                        ProcResourceX::Output(name) =>
-                            if !rctx.outs.contains(name) {
-                                return Err(format!("required resource `output {}` not present at call site", name))
-                            }
-                    }
-                }
-
-                Ok(())
-            }
             // TODO: currently, we only allow process calls to
-            // be part of a parallel composition.
+            // be the LHS of a parallel composition.
             // Because the split of permissions need to be explicitly specified
-            ProcX::Par(..) => todo!(),
+            ProcX::Par(k1, k2) => {
+                if let ProcX::Call(name, args) = k1.as_ref() {
+                    let proc_decl = ctx.procs.get(name).ok_or(format!("process `{}` does not exist", name))?;
+
+                    // Check argument types are correct
+                    if args.len() != proc_decl.params.len() {
+                        return Err(format!("mismatched number of arguments"));
+                    }
+
+                    // Check argument types and construct param -> arg mapping
+                    let mut subst = IndexMap::new();
+
+                    for (arg, param) in args.iter().zip(&proc_decl.params) {
+                        if arg.type_check(local)? != param.typ {
+                            return Err(format!("unmatched argument type"));
+                        }
+                        subst.insert(param.name.clone(), arg.clone());
+                    }
+
+                    // Check sufficient resources are provided
+                    for res in &proc_decl.res {
+                        match res.as_ref() {
+                            ProcResourceX::Perm(p) => {
+                                // Should have enough resource to call the process
+                                let p_subst = PermissionX::substitute(p, &subst);
+                                constraints.push(Rc::new(PermConstraintX::LessEq(p_subst.clone(), rctx.perm.clone())));
+                                rctx.perm = Rc::new(PermissionX::Sub(rctx.perm.clone(), p_subst));
+                            },
+
+                            // Check that input/output channels are within the resource context
+                            ProcResourceX::Input(name) =>
+                                if !rctx.ins.shift_remove(name) {
+                                    return Err(format!("required resource `input {}` not present at call site", name))
+                                }
+
+                            ProcResourceX::Output(name) =>
+                                if !rctx.outs.shift_remove(name) {
+                                    return Err(format!("required resource `output {}` not present at call site", name))
+                                }
+                        }
+                    }
+
+                    // Continue checking the rest of the parallel composition
+                    k2.type_check_inplace(ctx, local, rctx, constraints)
+                } else {
+                    Err(format!("currently only process calls are allowed to be the LHS of ||"))
+                }
+            },
             ProcX::Debug(k) => {
                 println!("local context: {:?}", local);
                 println!("resouce context: {:?}", rctx);

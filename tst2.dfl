@@ -11,6 +11,8 @@ chan j: bool | if j then empty else empty end
 //         p a
 //     end
 
-proc p | input i =
-    recv x <- i;
+proc p | input i, output i =
+    recv x <- i
     read y <- A[0]
+
+proc q | write A = q || recv x <- i
