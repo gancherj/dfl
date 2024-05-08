@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
@@ -161,8 +159,8 @@ impl ProcX {
                     &Var::from(&chan_decl.name),
                     t,
                 );
-                constraints.push(Rc::new(PermConstraintX::LessEq(send_perm.clone(), rctx.perm.clone())));
-                rctx.perm = Rc::new(PermissionX::Sub(rctx.perm.clone(), send_perm));
+                constraints.push(PermConstraintX::less_eq(&send_perm, &rctx.perm));
+                rctx.perm = PermissionX::sub(&rctx.perm, &send_perm);
 
                 // Check rest of the process
                 k.type_check_inplace(ctx, local, rctx, constraints)
@@ -182,9 +180,9 @@ impl ProcX {
                 let recv_perm = PermissionX::substitute_one(
                     &chan_decl.perm,
                     &Var::from(&chan_decl.name),
-                    &Rc::new(TermX::Var(v.clone())),
+                    &TermX::var(&v),
                 );
-                rctx.perm = Rc::new(PermissionX::Add(rctx.perm.clone(), recv_perm));
+                rctx.perm = PermissionX::add(&rctx.perm, &recv_perm);
 
                 // Receive a new variable
                 local.vars.insert(v.clone(), chan_decl.typ.clone());
@@ -220,7 +218,7 @@ impl ProcX {
                 }
 
                 // Check that we have suitable write permission
-                constraints.push(Rc::new(PermConstraintX::HasWrite(m.clone(), rctx.perm.clone())));
+                constraints.push(PermConstraintX::has_write(&m, &rctx.perm));
 
                 // Check rest of the process
                 k.type_check_inplace(ctx, local, rctx, constraints)
@@ -248,7 +246,7 @@ impl ProcX {
                 };
 
                 // Check that we have suitable read permission
-                constraints.push(Rc::new(PermConstraintX::HasRead(m.clone(), rctx.perm.clone())));
+                constraints.push(PermConstraintX::has_read(&m, &rctx.perm));
 
                 // Add read variable into context
                 local.vars.insert(v.clone(), typ.clone());
@@ -270,7 +268,8 @@ impl ProcX {
 
             // P <args> has the same typing rules as P <args> || skip
             ProcX::Call(name, args) =>
-                Rc::new(ProcX::Par(Rc::new(ProcX::Call(name.clone(), args.clone())), Rc::new(ProcX::Skip))).type_check_inplace(ctx, local, rctx, constraints),
+                ProcX::par(&ProcX::call(&name, args), &ProcX::skip())
+                    .type_check_inplace(ctx, local, rctx, constraints),
 
             // TODO: currently, we only allow process calls to
             // be the LHS of a parallel composition.
@@ -300,8 +299,8 @@ impl ProcX {
                             ProcResourceX::Perm(p) => {
                                 // Should have enough resource to call the process
                                 let p_subst = PermissionX::substitute(p, &subst);
-                                constraints.push(Rc::new(PermConstraintX::LessEq(p_subst.clone(), rctx.perm.clone())));
-                                rctx.perm = Rc::new(PermissionX::Sub(rctx.perm.clone(), p_subst));
+                                constraints.push(PermConstraintX::less_eq(&p_subst, &rctx.perm));
+                                rctx.perm = PermissionX::sub(&rctx.perm, &p_subst);
                             },
 
                             // Check that input/output channels are within the resource context
@@ -361,7 +360,7 @@ impl Ctx {
                 vars: IndexMap::new(),
             };
             let mut rctx = ResourceCtx {
-                perm: Rc::new(PermissionX::Empty),
+                perm: PermissionX::empty(),
                 ins: IndexSet::new(),
                 outs: IndexSet::new(),
             };
@@ -374,7 +373,7 @@ impl Ctx {
                 match res.as_ref() {
                     ProcResourceX::Perm(perm) => {
                         perm.type_check(self, &local)?;
-                        rctx.perm = Rc::new(PermissionX::Add(rctx.perm, perm.clone()));
+                        rctx.perm = PermissionX::add(&rctx.perm, &perm);
                     },
                     ProcResourceX::Input(name) => {
                         if !rctx.ins.insert(name.clone()) {
@@ -393,7 +392,7 @@ impl Ctx {
 
             println!("permission constraints for process `{}`:", decl.name);
             for constraint in constraints {
-                println!("  {:?}", constraint);
+                println!("  {}", constraint);
             }
         }
 

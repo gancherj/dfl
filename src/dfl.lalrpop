@@ -22,64 +22,66 @@ CommaSep<T>: Vec<T> = {
     }
 }
 
-pub Bool: bool = { "false" => false, "true" => true }
-pub Int: i32 = { r"0|-?[1-9][0-9]*" => i32::from_str(<>).unwrap() }
-pub Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Var(String::from_str(<>).unwrap()) }
-pub ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(String::from_str(<>).unwrap()) }
-pub ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(String::from_str(<>).unwrap()) }
-pub MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(String::from_str(<>).unwrap()) }
+Bool: bool = { "false" => false, "true" => true }
+Int: i32 = { r"0|-?[1-9][0-9]*" => i32::from_str(<>).unwrap() }
+Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Var(<>.into()) }
+ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(<>.into()) }
+ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(<>.into()) }
+MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(<>.into()) }
 
-pub ProcParam: ProcParam = {
+ProcParam: ProcParam = {
     "(" <v:Var> ":" <t:BaseType> ")" => ProcParam { name: v, typ: t },
 }
 
-pub BaseType: BaseType = {
+BaseType: BaseType = {
     "bool" => BaseType::Bool,
     "int" => BaseType::Int,
 }
 
-pub MutType: MutType = {
+MutType: MutType = {
     <t:BaseType> => MutType::Base(t),
     "[" <t:BaseType> "]" => MutType::Array(t),
 }
 
-pub PermFraction: PermFraction = {
+PermFraction: PermFraction = {
     "write" => PermFraction::Write,
     "read" => PermFraction::Read(0),
 }
 
-pub MutReference: MutReference = {
+MutReference: MutReference = {
     MutName => Rc::new(MutReferenceX::Base(<>)),
     <n:MutName> "[" <t:Term> "]" => Rc::new(MutReferenceX::Index(n, t)),
     <n:MutName> "[" <t1:Term?> ".." <t2:Term?> "]" => Rc::new(MutReferenceX::Slice(n, t1, t2)),
 }
 
-pub Permission: Permission = {
+PermissionReset = <Permission>;
+Permission: Permission = {
     #[precedence(level = "0")]
     "empty" => Rc::new(PermissionX::Empty),
     <f:PermFraction> <r:MutReference> => Rc::new(PermissionX::Fraction(f, r)),
-    "(" <p:Permission> ")" => p,
-    
     "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" => Rc::new(PermissionX::Ite(t, p1, p2)),
+    "(" <p:PermissionReset> ")" => p,
 
     #[precedence(level = "1")]
     #[assoc(side="left")]
     <p1:Permission> "+" <p2:Permission> => Rc::new(PermissionX::Add(p1, p2)),
 }
 
-pub Term: Term = {
+TermReset = <Term>;
+Term: Term = {
     #[precedence(level = "0")]
     Var => Rc::new(TermX::Var(<>)),
     Bool => Rc::new(TermX::Bool(<>)),
     Int => Rc::new(TermX::Int(<>)),
+    "(" <t:TermReset> ")" => t,
 
     #[precedence(level = "1")]
     #[assoc(side="left")]
-    <t1:Term> "*" <t2:Term> => Rc::new(TermX::Add(t1, t2)),
+    <t1:Term> "*" <t2:Term> => Rc::new(TermX::Mul(t1, t2)),
 
     #[precedence(level = "2")]
     #[assoc(side="left")]
-    <t1:Term> "+" <t2:Term> => Rc::new(TermX::Mul(t1, t2)),
+    <t1:Term> "+" <t2:Term> => Rc::new(TermX::Add(t1, t2)),
 
     #[precedence(level = "3")]
     #[assoc(side="left")]
@@ -95,7 +97,8 @@ pub Term: Term = {
     <t1:Term> "and" <t2:Term> => Rc::new(TermX::And(t1, t2)),
 }
 
-pub Proc: Proc = {
+ProcReset = <Proc>;
+Proc: Proc = {
     #[precedence(level = "0")]
     "skip" => Rc::new(ProcX::Skip),
     "send" <t:Term> "->" <c:ChanName> <k:Proc?> => Rc::new(ProcX::Send(c, t, k.unwrap_or(Rc::new(ProcX::Skip)))),
@@ -107,21 +110,21 @@ pub Proc: Proc = {
     "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" => Rc::new(ProcX::Ite(t, k1, k2)),
     "if" <t:Term> "then" <k:Proc> "end" => Rc::new(ProcX::Ite(t, k, Rc::new(ProcX::Skip))),
     <p:ProcName> <args:Term*> => Rc::new(ProcX::Call(p, args)),
-    
-    "(" <p:Proc> ")" => p,
+
+    "(" <p:ProcReset> ")" => p,
 
     #[precedence(level = "1")]
     #[assoc(side="right")]
     <k1:Proc> "||" <k2:Proc> => Rc::new(ProcX::Par(k1, k2)),
 }
 
-pub ProcResource: ProcResource = {
+ProcResource: ProcResource = {
     Permission => Rc::new(ProcResourceX::Perm(<>)),
     "input" <n:ChanName> => Rc::new(ProcResourceX::Input(n)),
     "output" <n:ChanName> => Rc::new(ProcResourceX::Output(n)),
 }
 
-pub Decl: Decl = {
+Decl: Decl = {
     "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
     "chan" <n:ChanName> ":" <t:BaseType> "|" <p:Permission> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: p })),

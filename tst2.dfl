@@ -1,18 +1,14 @@
 mut A: [int]
 
-chan i: int | read A[i]
-chan j: bool | if j then empty else empty end
+chan st_index: int | write A[st_index]
 
-// proc p (a: int) (b: int) | write A[a + b], read A, input i, input j, output i =
-//     // recv x <- i;
-//     if a < 0 then
-//         p a
-//     else
-//         p a
-//     end
+proc Inc (i: int) | write A[i..], output st_index =
+    send i -> st_index
+    Inc (i + 1)
 
-proc p | input i, output i =
-    recv x <- i
-    read y <- A[0]
-
-proc q | write A = q || recv x <- i
+proc St | input st_index =
+    recv i <- st_index
+    write 0 -> A[i]
+    St
+     
+proc Program | write A, input st_index, output st_index = Inc 0 || St

@@ -5,16 +5,16 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct MutName(pub String);
+pub struct MutName(pub Rc<str>);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct ChanName(pub String);
+pub struct ChanName(pub Rc<str>);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct ProcName(pub String);
+pub struct ProcName(pub Rc<str>);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Var(pub String);
+pub struct Var(pub Rc<str>);
 
 #[derive(Clone, Copy, Debug)]
 pub enum PermFraction {
@@ -144,6 +144,12 @@ impl From<&ChanName> for Var {
     }
 }
 
+impl From<&str> for Var {
+    fn from(value: &str) -> Var {
+        Var(value.into())
+    }
+}
+
 impl Ctx {
     pub fn new() -> Ctx {
         Ctx {
@@ -182,6 +188,10 @@ impl Ctx {
 }
 
 impl TermX {
+    pub fn var(v: &Var) -> Term {
+        Rc::new(TermX::Var(v.clone()))
+    }
+
     /// Returns Some if the term is substituted, None if unchanged
     fn substitute_inplace(term: &Term, subst: &IndexMap<Var, Term>) -> Option<Term> {
         match term.as_ref() {
@@ -300,9 +310,53 @@ impl TermX {
         self.free_vars_inplace(&mut vars);
         return vars;
     }
+
+    /// Precedence of the top level operator
+    fn precedence(&self) -> u32 {
+        match self {
+            TermX::Var(..) => 0,
+            TermX::Bool(..) => 0,
+            TermX::Int(..) => 0,
+            TermX::Add(..) => 2,
+            TermX::Mul(..) => 1,
+            TermX::And(..) => 5,
+            TermX::Less(..) => 3,
+            TermX::Equal(..) => 3,
+            TermX::Not(..) => 4,
+        }
+    }
 }
 
 impl PermissionX {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            PermissionX::Empty => true,
+            _ => false,
+        }
+    }
+
+    pub fn empty() -> Permission {
+        Rc::new(PermissionX::Empty)
+    }
+
+    pub fn add(p1: &Permission, p2: &Permission) -> Permission {
+        if p1.is_empty() {
+            p2.clone()
+        } else if p2.is_empty() {
+            p1.clone()
+        } else {
+            Rc::new(PermissionX::Add(p1.clone(), p2.clone()))
+        }
+    }
+
+    pub fn sub(p1: &Permission, p2: &Permission) -> Permission {
+        if p2.is_empty() {
+            p1.clone()
+        } else {
+            Rc::new(PermissionX::Sub(p1.clone(), p2.clone()))
+        }
+    }
+
     /// Returns Some if the term is substituted, None if unchanged
     fn substitute_inplace(perm: &Permission, subst: &IndexMap<Var, Term>) -> Option<Permission> {
         match perm.as_ref() {
@@ -431,6 +485,20 @@ impl PermissionX {
     }
 }
 
+impl ProcX {
+    pub fn skip() -> Proc {
+        Rc::new(ProcX::Skip)
+    }
+
+    pub fn par(p1: &Proc, p2: &Proc) -> Proc {
+        Rc::new(ProcX::Par(p1.clone(), p2.clone()))
+    }
+
+    pub fn call(name: &ProcName, args: &[Term]) -> Proc {
+        Rc::new(ProcX::Call(name.clone(), Vec::from(args)))
+    }
+}
+
 impl fmt::Display for Var {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -469,6 +537,144 @@ impl fmt::Display for MutType {
         match self {
             MutType::Base(base) => write!(f, "{}", base),
             MutType::Array(base) => write!(f, "[{}]", base),
+        }
+    }
+}
+
+impl fmt::Display for TermX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TermX::Var(var) => write!(f, "{}", var),
+            TermX::Bool(b) => write!(f, "{}", b),
+            TermX::Int(i) => write!(f, "{}", i),
+            TermX::Add(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " + {}", t2)?;
+                } else {
+                    write!(f, " + ({})", t2)?;
+                }
+                Ok(())
+            },
+            TermX::Mul(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " * {}", t2)?;
+                } else {
+                    write!(f, " * ({})", t2)?;
+                }
+                Ok(())
+            },
+            TermX::And(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " and {}", t2)?;
+                } else {
+                    write!(f, " and ({})", t2)?;
+                }
+                Ok(())
+            },
+            TermX::Less(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " < {}", t2)?;
+                } else {
+                    write!(f, " < ({})", t2)?;
+                }
+                Ok(())
+            },
+            TermX::Equal(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " = {}", t2)?;
+                } else {
+                    write!(f, " = ({})", t2)?;
+                }
+                Ok(())
+            },
+            TermX::Not(t) => {
+                if t.precedence() <= self.precedence() {
+                    write!(f, "not {}", t)?;
+                } else {
+                    write!(f, "not ({})", t)?;
+                }
+                Ok(())
+            },
+        }
+    }
+}
+
+impl fmt::Display for PermFraction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PermFraction::Write => write!(f, "write"),
+            PermFraction::Read(k) => write!(f, "read_{}", k),
+        }
+    }
+}
+
+impl fmt::Display for MutReferenceX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MutReferenceX::Base(name) => write!(f, "{}", name),
+            MutReferenceX::Index(name, t) => write!(f, "{}[{}]", name, t),
+            MutReferenceX::Slice(name, t1, t2) =>
+                write!(
+                    f, "{}[{}..{}]", name,
+                    t1.as_ref().unwrap_or(&Rc::new(TermX::Var(Var::from("")))),
+                    t2.as_ref().unwrap_or(&Rc::new(TermX::Var(Var::from("")))),
+                ),
+        }
+    }
+}
+
+impl fmt::Display for PermissionX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PermissionX::Empty => write!(f, "0"),
+            PermissionX::Add(p1, p2) =>
+                if match p2.as_ref() {
+                    PermissionX::Sub(..) => true,
+                    _ => false,
+                } {
+                    write!(f, "{} + ({})", p1, p2)
+                } else {
+                    write!(f, "{} + {}", p1, p2)
+                }
+            PermissionX::Sub(p1, p2) =>
+                if match p2.as_ref() {
+                    PermissionX::Add(..) => true,
+                    PermissionX::Sub(..) => true,
+                    _ => false,
+                } {
+                    write!(f, "{} - ({})", p1, p2)
+                } else {
+                    write!(f, "{} - {}", p1, p2)
+                },
+            PermissionX::Ite(t, p1, p2) =>
+                write!(f, "if {} then {} else {} end", t, p1, p2),
+            PermissionX::Fraction(frac, mut_ref) =>
+                write!(f, "{} {}", frac, mut_ref),
         }
     }
 }
