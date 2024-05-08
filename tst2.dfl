@@ -11,4 +11,5 @@ proc St | input st_index =
     write 0 -> A[i]
     St
      
-proc Program | write A, input st_index, output st_index = Inc 0 || St
+proc Program | write A, input st_index, output st_index =
+    Inc 0 || St

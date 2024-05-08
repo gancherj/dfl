@@ -57,7 +57,7 @@ pub type Term = Rc<TermX>;
 pub enum TermX {
     Var(Var),
     Bool(bool),
-    Int(i32),
+    Int(i64),
 
     Add(Term, Term),
     Mul(Term, Term),
