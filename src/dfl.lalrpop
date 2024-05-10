@@ -35,6 +35,7 @@ Int: i64 = {
     "-?[1-9][0-9]*" => i64::from_str(<>).unwrap(),
 }
 Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Var(<>.into()) }
+Const: Const = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Const(<>.into()) }
 ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(<>.into()) }
 ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(<>.into()) }
 MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(<>.into()) }
@@ -80,7 +81,7 @@ Permission: Permission = {
 TermReset = <Term>;
 Term: Term = {
     #[precedence(level = "0")]
-    Var => Rc::new(TermX::Var(<>)),
+    Var => Rc::new(TermX::Var(<>)), // Both variables and constants are parsed as variables first, and constants are then converted later
     Bool => Rc::new(TermX::Bool(<>)),
     Int => Rc::new(TermX::Int(<>)),
     "(" <t:TermReset> ")" => t,
@@ -130,11 +131,12 @@ Proc: Proc = {
 
 ProcResource: ProcResource = {
     Permission => Rc::new(ProcResourceX::Perm(<>)),
-    "input" <n:ChanName> => Rc::new(ProcResourceX::Input(n)),
-    "output" <n:ChanName> => Rc::new(ProcResourceX::Output(n)),
+    "in" <n:ChanName> => Rc::new(ProcResourceX::Input(n)),
+    "out" <n:ChanName> => Rc::new(ProcResourceX::Output(n)),
 }
 
 Decl: Decl = {
+    "const" <n:Const> ":" <t:BaseType> => Decl::Const(Rc::new(ConstDeclX { name: n, typ: t })),
     "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
     "chan" <n:ChanName> ":" <t:BaseType> "|" <p:Permission> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: p })),

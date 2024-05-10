@@ -26,18 +26,23 @@ pub struct ResourceCtx {
 impl TermX {
     /// Checks the type of a term under a local context
     /// Returns either the type or an error message
-    pub fn type_check(&self, local: &LocalCtx) -> Result<BaseType, String> {
+    pub fn type_check(&self, ctx: &Ctx, local: &LocalCtx) -> Result<BaseType, String> {
         match self {
             TermX::Var(var) => Ok(local
                 .vars
                 .get(var)
                 .ok_or(format!("variable `{}` not in context", var))?
                 .clone()),
+            TermX::Const(c) =>
+                ctx.consts
+                    .get(c)
+                    .map(|decl| decl.typ.clone())
+                    .ok_or(format!("constant `{}` not defined", c)),
             TermX::Bool(_) => Ok(BaseType::Bool),
             TermX::Int(_) => Ok(BaseType::Int),
             TermX::Add(t1, t2) | TermX::Mul(t1, t2) | TermX::Less(t1, t2) => {
-                let typ1 = t1.type_check(local)?;
-                let typ2 = t2.type_check(local)?;
+                let typ1 = t1.type_check(ctx, local)?;
+                let typ2 = t2.type_check(ctx, local)?;
                 if typ1 == typ2 && typ1 == BaseType::Int {
                     Ok(BaseType::Int)
                 } else {
@@ -45,8 +50,8 @@ impl TermX {
                 }
             }
             TermX::And(t1, t2) => {
-                let typ1 = t1.type_check(local)?;
-                let typ2 = t2.type_check(local)?;
+                let typ1 = t1.type_check(ctx, local)?;
+                let typ2 = t2.type_check(ctx, local)?;
                 if typ1 == typ2 && typ1 == BaseType::Bool {
                     Ok(BaseType::Bool)
                 } else {
@@ -54,14 +59,14 @@ impl TermX {
                 }
             }
             TermX::Equal(t1, t2) => {
-                if t1.type_check(local)? == t2.type_check(local)? {
+                if t1.type_check(ctx, local)? == t2.type_check(ctx, local)? {
                     Ok(BaseType::Bool)
                 } else {
                     Err(format!("incorrect subterm type"))
                 }
             }
             TermX::Not(t) => {
-                if t.type_check(local)? == BaseType::Bool {
+                if t.type_check(ctx, local)? == BaseType::Bool {
                     Ok(BaseType::Bool)
                 } else {
                     Err(format!("incorrect subterm type"))
@@ -80,7 +85,7 @@ impl PermissionX {
             PermissionX::Sub(p1, p2) =>
                 p1.type_check(ctx, local).and(p2.type_check(ctx, local)),
             PermissionX::Ite(t, p1, p2) => {
-                if t.type_check(local)? != BaseType::Bool {
+                if t.type_check(ctx, local)? != BaseType::Bool {
                     Err(format!("permission if condition is not of type bool"))
                 } else {
                     p1.type_check(ctx, local)?;
@@ -99,7 +104,7 @@ impl PermissionX {
                     ctx.muts
                         .get(name)
                         .ok_or(format!("mutable `{}` not declared", name))?;
-                    if t.type_check(local)? == BaseType::Int {
+                    if t.type_check(ctx, local)? == BaseType::Int {
                         Ok(())
                     } else {
                         Err(format!("index to a mutable should be int"))
@@ -110,12 +115,12 @@ impl PermissionX {
                         .get(name)
                         .ok_or(format!("mutable `{}` not declared", name))?;
                     if let Some(t1) = t1 {
-                        if t1.type_check(local)? != BaseType::Int {
+                        if t1.type_check(ctx, local)? != BaseType::Int {
                             return Err(format!("index to a mutable should be int"));
                         }
                     }
                     if let Some(t2) = t2 {
-                        if t2.type_check(local)? != BaseType::Int {
+                        if t2.type_check(ctx, local)? != BaseType::Int {
                             return Err(format!("index to a mutable should be int"));
                         }
                     }
@@ -144,7 +149,7 @@ impl ProcX {
                     .get(c)
                     .ok_or(format!("channel `{}` does not exist", c))?;
 
-                if t.type_check(local)? != chan_decl.typ {
+                if t.type_check(ctx, local)? != chan_decl.typ {
                     return Err(format!("unmatched send channel type"));
                 }
 
@@ -192,7 +197,7 @@ impl ProcX {
             }
             ProcX::Write(m, t, k) => {
                 // Check t matches the type of the reference
-                let t_typ = t.type_check(local)?;
+                let t_typ = t.type_check(ctx, local)?;
                 match m.as_ref() {
                     MutReferenceX::Base(name) => {
                         let mut_decl = ctx.muts.get(name).ok_or(format!("mutable `{}` does not exist", name))?;
@@ -255,7 +260,7 @@ impl ProcX {
                 k.type_check_inplace(ctx, local, rctx, constraints)
             }
             ProcX::Ite(t, k1, k2) => {
-                if t.type_check(local)? != BaseType::Bool {
+                if t.type_check(ctx, local)? != BaseType::Bool {
                     return Err(format!("if condition not of type bool"));
                 }
 
@@ -287,7 +292,7 @@ impl ProcX {
                     let mut subst = IndexMap::new();
 
                     for (arg, param) in args.iter().zip(&proc_decl.params) {
-                        if arg.type_check(local)? != param.typ {
+                        if arg.type_check(ctx, local)? != param.typ {
                             return Err(format!("unmatched argument type"));
                         }
                         subst.insert(param.name.clone(), arg.clone());
