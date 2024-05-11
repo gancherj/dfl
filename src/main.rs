@@ -4,6 +4,7 @@ use std::fs;
 pub mod ast;
 pub mod check;
 pub mod permission;
+pub mod smt;
 
 use crate::ast::*;
 

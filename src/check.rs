@@ -23,6 +23,41 @@ pub struct ResourceCtx {
     pub outs: IndexSet<ChanName>,
 }
 
+impl BaseType {
+    pub fn type_check(&self, ctx: &Ctx) -> Result<(), String> {
+        match self {
+            BaseType::Bool => Ok(()),
+            BaseType::Int => Ok(()),
+            BaseType::Ref(ns) => {
+                // Check that all mutables referenced are array types
+                // and collect all base types as an IndexSet
+                let base_types = ns
+                    .iter()
+                    .map(|n| {
+                        let decl = ctx.muts.get(n).ok_or(format!("mutable `{}` not defined", n))?;
+                        match &decl.typ {
+                            MutType::Base(t) => Err(format!("reference to a mutable with base type {}", t)),
+                            MutType::Array(t) => Ok(t),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .collect::<IndexSet<_>>();
+
+                // Check that mutables have the same base type
+                if base_types.len() == 1 {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "reference to array mutable(s) with inconsistent base types {}",
+                        base_types.iter().map(|t| t.to_string()).collect::<String>(),
+                    ))
+                }
+            }
+        }
+    }
+}
+
 impl TermX {
     /// Checks the type of a term under a local context
     /// Returns either the type or an error message
@@ -349,8 +384,22 @@ impl Ctx {
     pub fn type_check(&self) -> Result<(), String> {
         // Mutables types are base types and are always correct
 
+        // Check mutable types are all non-reference types
+        for decl in self.muts.values() {
+            let base = match &decl.typ {
+                MutType::Base(t) => t,
+                MutType::Array(t) => t,
+            };
+            match base {
+                BaseType::Bool => Ok(()),
+                BaseType::Int => Ok(()),
+                BaseType::Ref(..) => Err(format!("mutable `{}` cannot have a reference type", decl.name)),
+            }?
+        }
+
         // Check channel types
         for decl in self.chans.values() {
+            decl.typ.type_check(self)?;
             decl.perm.type_check(
                 self,
                 &LocalCtx {
@@ -371,6 +420,7 @@ impl Ctx {
             };
 
             for param in &decl.params {
+                param.typ.type_check(self)?;
                 local.vars.insert(param.name.clone(), param.typ.clone());
             }
 

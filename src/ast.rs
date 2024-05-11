@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::ops::Index;
 use std::rc::Rc;
 
 use indexmap::IndexMap;
@@ -48,6 +47,7 @@ pub enum PermissionX {
 pub enum BaseType {
     Bool,
     Int,
+    Ref(Rc<[MutName]>),
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -774,6 +774,11 @@ impl fmt::Display for BaseType {
         match self {
             BaseType::Bool => write!(f, "bool"),
             BaseType::Int => write!(f, "int"),
+            BaseType::Ref(ns) => if ns.len() == 1 {
+                write!(f, "&{}", ns[0])
+            } else {
+                write!(f, "&{{{}}}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "))
+            }
         }
     }
 }

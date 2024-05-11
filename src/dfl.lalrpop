@@ -40,18 +40,24 @@ ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(<>.into()) }
 ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(<>.into()) }
 MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(<>.into()) }
 
-ProcParam: ProcParam = {
-    "(" <v:Var> ":" <t:BaseType> ")" => ProcParam { name: v, typ: t },
-}
-
 BaseType: BaseType = {
     "bool" => BaseType::Bool,
     "int" => BaseType::Int,
 }
 
+BaseTypeWithRef: BaseType = {
+    BaseType,
+    "&" <n:MutName> => BaseType::Ref(Rc::new([n])),
+    "&" "{" <ns:CommaSep<MutName>> "}" => BaseType::Ref(ns.into()),
+}
+
 MutType: MutType = {
     <t:BaseType> => MutType::Base(t),
     "[" <t:BaseType> "]" => MutType::Array(t),
+}
+
+ProcParam: ProcParam = {
+    "(" <v:Var> ":" <t:BaseTypeWithRef> ")" => ProcParam { name: v, typ: t },
 }
 
 PermFraction: PermFraction = {
@@ -136,9 +142,9 @@ ProcResource: ProcResource = {
 }
 
 Decl: Decl = {
-    "const" <n:Const> ":" <t:BaseType> => Decl::Const(Rc::new(ConstDeclX { name: n, typ: t })),
+    "const" <n:Const> ":" <t:BaseTypeWithRef> => Decl::Const(Rc::new(ConstDeclX { name: n, typ: t })),
     "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
-    "chan" <n:ChanName> ":" <t:BaseType> "|" <p:Permission> =>
+    "chan" <n:ChanName> ":" <t:BaseTypeWithRef> "|" <p:Permission> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: p })),
     "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" <r:CommaSep<ProcResource>> "=" <b:Proc> =>
         Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: r, body: b })),
