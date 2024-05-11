@@ -48,7 +48,7 @@ pub enum PermissionX {
 pub enum BaseType {
     Bool,
     Int,
-    Ref(Rc<[MutName]>),
+    Ref(Rc<[MutName]>, usize),
 }
 
 pub type MutType = Rc<MutTypeX>;
@@ -423,6 +423,20 @@ impl TermX {
 }
 
 impl MutTypeX {
+    /// get_deref_type([[int]], 0) = [[int]]
+    /// get_deref_type([[int]], 1) = [int]
+    /// get_deref_type([[int]], 3) = None
+    pub fn get_deref_type(typ: &MutType, level: usize) -> Option<MutType> {
+        if level == 0 {
+            Some(typ.clone())
+        } else {
+            match typ.as_ref() {
+                MutTypeX::Base(..) => None,
+                MutTypeX::Array(t) => MutTypeX::get_deref_type(t, level - 1),
+            }
+        }
+    }
+
     pub fn get_base_type(&self) -> &BaseType {
         match self {
             MutTypeX::Base(t) => t,
@@ -492,6 +506,18 @@ impl MutReferenceX {
                     None
                 }
             }
+        }
+    }
+
+    // Substitute the highest level deref with a fixed reference to a mutable
+    pub fn substitute_deref_with_mut_name(mut_ref: &MutReference, name: &MutName) -> MutReference {
+        match mut_ref.as_ref() {
+            MutReferenceX::Base(..) => mut_ref.clone(),
+            MutReferenceX::Deref(..) => Rc::new(MutReferenceX::Base(name.clone())),
+            MutReferenceX::Index(m, t) =>
+                Rc::new(MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
+            MutReferenceX::Slice(m, t1, t2) =>
+                Rc::new(MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
         }
     }
 }
@@ -824,10 +850,10 @@ impl fmt::Display for BaseType {
         match self {
             BaseType::Bool => write!(f, "bool"),
             BaseType::Int => write!(f, "int"),
-            BaseType::Ref(ns) => if ns.len() == 1 {
-                write!(f, "&{}", ns[0])
+            BaseType::Ref(ns, level) => if ns.len() == 1 {
+                write!(f, "&{}{}", ns[0], "[*]".repeat(*level))
             } else {
-                write!(f, "&{{{}}}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "))
+                write!(f, "&{{{}}}{}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "), "[*]".repeat(*level))
             }
         }
     }

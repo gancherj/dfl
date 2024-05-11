@@ -1,0 +1,53 @@
+
+mut A: [int]
+mut B: [int]
+
+chan steer_a: &A | empty
+chan steer_b: &B | empty
+chan steer_decider: bool | empty
+chan steer_out: &{A, B} | empty
+
+chan inv_out: &{A, B} | empty
+
+chan st_index: int | write A[st_index] + write B[st_index]
+
+proc Steer | in steer_a, in steer_b, in steer_decider, out steer_out =
+    recv decider <- steer_decider
+
+    if decider then
+        recv a <- steer_a
+        send a -> steer_out
+    else
+        recv b <- steer_b
+        send b -> steer_out
+    end
+
+proc InvI | in steer_out, out inv_out =
+    recv inv <- steer_out
+    InvS inv
+
+proc InvS (inv: &{A, B}) | out inv_out =
+    send inv -> inv_out
+    InvS inv
+
+proc Inc (i: int) | write A[i..], write B[i..], out st_index =
+    send i -> st_index
+    Inc (i + 1)
+
+proc St | in inv_out, in st_index =
+    recv p <- inv_out
+    recv i <- st_index
+    write 10086 -> *p[i]
+    St
+
+proc Program |
+    write A, write B,
+    in steer_a, out steer_a,
+    in steer_b, out steer_b,
+    in steer_decider, out steer_decider,
+    in steer_out, out steer_out,
+    in inv_out, out inv_out,
+    in st_index, out st_index =
+        Steer || InvI || Inc 0 || St ||
+        send &A[1..] -> steer_a
+        send true -> steer_decider

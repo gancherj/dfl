@@ -47,8 +47,8 @@ BaseType: BaseType = {
 
 BaseTypeWithRef: BaseType = {
     BaseType,
-    "&" <n:MutName> => BaseType::Ref(Rc::new([n])),
-    "&" "{" <ns:CommaSep<MutName>> "}" => BaseType::Ref(ns.into()),
+    "&" <n:MutName> <l:("[""*""]")*> => BaseType::Ref(Rc::new([n]), l.len()),
+    "&" "{" <ns:CommaSep<MutName>> "}" <l:("[""*""]")*> => BaseType::Ref(ns.into(), l.len()),
 }
 
 MutType: MutType = {
@@ -67,7 +67,7 @@ PermFraction: PermFraction = {
 
 MutReference: MutReference = {
     MutName => Rc::new(MutReferenceX::Base(<>)),
-    "*" "(" <t:Term> ")" => Rc::new(MutReferenceX::Deref(t)),
+    "*" <t:AtomicTerm> => Rc::new(MutReferenceX::Deref(t)),
     <m:MutReference> "[" <t:Term> "]" => Rc::new(MutReferenceX::Index(m, t)),
     <m:MutReference> "[" <t1:Term?> ".." <t2:Term?> "]" => Rc::new(MutReferenceX::Slice(m, t1, t2)),
 }
@@ -86,13 +86,16 @@ Permission: Permission = {
 }
 
 TermReset = <Term>;
-Term: Term = {
-    #[precedence(level = "0")]
+AtomicTerm: Term = {
     Var => Rc::new(TermX::Var(<>)), // Both variables and constants are parsed as variables first, and constants are then converted later
     Bool => Rc::new(TermX::Bool(<>)),
     Int => Rc::new(TermX::Int(<>)),
-    "&" <m:MutReference> => Rc::new(TermX::Ref(m)),
     "(" <t:TermReset> ")" => t,
+}
+Term: Term = {
+    #[precedence(level = "0")]
+    AtomicTerm,
+    "&" <m:MutReference> => Rc::new(TermX::Ref(m)),
 
     #[precedence(level = "1")]
     #[assoc(side="left")]
