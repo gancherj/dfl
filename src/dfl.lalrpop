@@ -52,8 +52,8 @@ BaseTypeWithRef: BaseType = {
 }
 
 MutType: MutType = {
-    <t:BaseType> => MutType::Base(t),
-    "[" <t:BaseType> "]" => MutType::Array(t),
+    <t:BaseType> => Rc::new(MutTypeX::Base(t)),
+    "[" <t:MutType> "]" => Rc::new(MutTypeX::Array(t)),
 }
 
 ProcParam: ProcParam = {
@@ -67,8 +67,9 @@ PermFraction: PermFraction = {
 
 MutReference: MutReference = {
     MutName => Rc::new(MutReferenceX::Base(<>)),
-    <n:MutName> "[" <t:Term> "]" => Rc::new(MutReferenceX::Index(n, t)),
-    <n:MutName> "[" <t1:Term?> ".." <t2:Term?> "]" => Rc::new(MutReferenceX::Slice(n, t1, t2)),
+    "*" "(" <t:Term> ")" => Rc::new(MutReferenceX::Deref(t)),
+    <m:MutReference> "[" <t:Term> "]" => Rc::new(MutReferenceX::Index(m, t)),
+    <m:MutReference> "[" <t1:Term?> ".." <t2:Term?> "]" => Rc::new(MutReferenceX::Slice(m, t1, t2)),
 }
 
 PermissionReset = <Permission>;
@@ -90,6 +91,7 @@ Term: Term = {
     Var => Rc::new(TermX::Var(<>)), // Both variables and constants are parsed as variables first, and constants are then converted later
     Bool => Rc::new(TermX::Bool(<>)),
     Int => Rc::new(TermX::Int(<>)),
+    "&" <m:MutReference> => Rc::new(TermX::Ref(m)),
     "(" <t:TermReset> ")" => t,
 
     #[precedence(level = "1")]

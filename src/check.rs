@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
@@ -24,10 +25,34 @@ pub struct ResourceCtx {
 }
 
 impl BaseType {
-    pub fn type_check(&self, ctx: &Ctx) -> Result<(), String> {
+    pub fn is_ref(&self) -> bool {
         match self {
-            BaseType::Bool => Ok(()),
-            BaseType::Int => Ok(()),
+            BaseType::Bool => false,
+            BaseType::Int => false,
+            BaseType::Ref(..) => true,
+        }
+    }
+
+    /// Checks if self <= other in subtyping
+    pub fn is_subtype(&self, other: &BaseType) -> bool {
+        match self {
+            BaseType::Bool => self == other,
+            BaseType::Int => self == other,
+            BaseType::Ref(ns) => match other {
+                BaseType::Bool => false,
+                BaseType::Int => false,
+                BaseType::Ref(ms) =>
+                    // ns is included in ms
+                    ns.iter().collect::<IndexSet<_>>().is_subset(&ms.iter().collect::<IndexSet<_>>()),
+            },
+        }
+    }
+
+    // Try to get the base type of a reference type
+    pub fn get_ref_base_type(&self, ctx: &Ctx) -> Result<MutType, String> {
+        match self {
+            BaseType::Bool => Err(format!("bool cannot be deferenced")),
+            BaseType::Int => Err(format!("bool cannot be deferenced")),
             BaseType::Ref(ns) => {
                 // Check that all mutables referenced are array types
                 // and collect all base types as an IndexSet
@@ -35,9 +60,9 @@ impl BaseType {
                     .iter()
                     .map(|n| {
                         let decl = ctx.muts.get(n).ok_or(format!("mutable `{}` not defined", n))?;
-                        match &decl.typ {
-                            MutType::Base(t) => Err(format!("reference to a mutable with base type {}", t)),
-                            MutType::Array(t) => Ok(t),
+                        match decl.typ.as_ref() {
+                            MutTypeX::Base(t) => Err(format!("reference to a mutable with base type {}", t)),
+                            MutTypeX::Array(t) => Ok(t.clone()),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?
@@ -46,7 +71,7 @@ impl BaseType {
 
                 // Check that mutables have the same base type
                 if base_types.len() == 1 {
-                    Ok(())
+                    Ok(base_types.first().unwrap().clone())
                 } else {
                     Err(format!(
                         "reference to array mutable(s) with inconsistent base types {}",
@@ -56,6 +81,88 @@ impl BaseType {
             }
         }
     }
+
+    pub fn type_check(&self, ctx: &Ctx) -> Result<(), String> {
+        match self {
+            BaseType::Bool => Ok(()),
+            BaseType::Int => Ok(()),
+            BaseType::Ref(..) => self.get_ref_base_type(ctx).map(|_| ()),
+        }
+    }
+}
+
+impl MutReferenceX {
+    /// Check that the terms are well-typed
+    /// and we are not indexing into base types.
+    /// Return the type of the mutable reference
+    /// and all global mutables that are potentially
+    /// referenced.
+    /// e.g. if mut A: [[int]], then
+    /// type_check(A[1]) = [int]
+    /// type_check(A[1:]) = [[int]]
+    /// type_check(A[1][2]) = int
+    pub fn type_check(&self, ctx: &Ctx, local: &LocalCtx) -> Result<(MutType, IndexSet<MutName>), String> {
+        match self {
+            MutReferenceX::Base(n) =>
+                Ok((
+                    ctx.muts.get(n).ok_or(format!("mutable `{}` not declared", n))?.typ.clone(),
+                    IndexSet::from([n.clone()]),
+                )),
+            MutReferenceX::Deref(t) =>
+                match t.type_check(ctx, local)? {
+                    BaseType::Bool => Err(format!("dereferencing bool")),
+                    BaseType::Int => Err(format!("dereferencing int")),
+                    BaseType::Ref(names) => Ok((
+                        Rc::new(MutTypeX::Array(t.type_check(ctx, local)?.get_ref_base_type(ctx)?)),
+                        names.iter().map(|n| n.clone()).collect(),
+                    )),
+                }
+            MutReferenceX::Index(m, t) => {
+                if t.type_check(ctx, local)? != BaseType::Int {
+                    return Err(format!("index to a mutable should be int"));
+                }
+                let (typ, names) = m.type_check(ctx, local)?;
+                match typ.as_ref() {
+                    MutTypeX::Base(..) => Err(format!("indexing into base type")),
+                    MutTypeX::Array(t) => Ok((t.clone(), names)),
+                }
+            }
+            MutReferenceX::Slice(m, t1, t2) => {
+                if let Some(t1) = t1 {
+                    if t1.type_check(ctx, local)? != BaseType::Int {
+                        return Err(format!("index to a mutable should be int"));
+                    }
+                }
+                if let Some(t2) = t2 {
+                    if t2.type_check(ctx, local)? != BaseType::Int {
+                        return Err(format!("index to a mutable should be int"));
+                    }
+                }
+                let (typ, names) = m.type_check(ctx, local)?;
+                match typ.as_ref() {
+                    MutTypeX::Base(..) => Err(format!("indexing into base type")),
+                    MutTypeX::Array(..) => Ok((typ, names)),
+                }
+            }
+        }
+    }
+
+    // Get all possible mutable names referenced
+    // pub fn get_mut_names(&self, ctx: &Ctx, local: &LocalCtx) -> Result<IndexSet<MutName>, String> {
+    //     match self {
+    //         MutReferenceX::Base(n) =>
+    //             Ok(IndexSet::from([n.clone()])),
+    //         MutReferenceX::Deref(t) => {
+    //             match t.type_check(ctx, local)? {
+    //                 BaseType::Bool => Err(format!("dereferencing bool")),
+    //                 BaseType::Int => Err(format!("dereferencing int")),
+    //                 BaseType::Ref(names) => Ok(IndexSet::from(names.as_ref())),
+    //             }
+    //         }
+    //         MutReferenceX::Index(m, _) => m.get_mut_names(ctx, local),
+    //         MutReferenceX::Slice(m, _, _) => m.get_mut_names(ctx, local),
+    //     }
+    // }
 }
 
 impl TermX {
@@ -73,6 +180,14 @@ impl TermX {
                     .get(c)
                     .map(|decl| decl.typ.clone())
                     .ok_or(format!("constant `{}` not defined", c)),
+            TermX::Ref(m) => {
+                let (m_typ, names) = m.type_check(ctx, local)?;
+                match m_typ.as_ref() {
+                    // TODO: check this
+                    MutTypeX::Base(..) => Ok(BaseType::Ref(names.iter().map(|n| n.clone()).collect::<Vec<_>>()[..].into())),
+                    MutTypeX::Array(..) => Err(format!("non-first level reference currently not supported")),
+                }
+            },
             TermX::Bool(_) => Ok(BaseType::Bool),
             TermX::Int(_) => Ok(BaseType::Int),
             TermX::Add(t1, t2) | TermX::Mul(t1, t2) | TermX::Less(t1, t2) => {
@@ -94,7 +209,9 @@ impl TermX {
                 }
             }
             TermX::Equal(t1, t2) => {
-                if t1.type_check(ctx, local)? == t2.type_check(ctx, local)? {
+                let typ1 = t1.type_check(ctx, local)?;
+                let typ2 = t2.type_check(ctx, local)?;
+                if typ1 == typ2 && !typ1.is_ref() {
                     Ok(BaseType::Bool)
                 } else {
                     Err(format!("incorrect subterm type"))
@@ -128,40 +245,7 @@ impl PermissionX {
                     Ok(())
                 }
             }
-            PermissionX::Fraction(_, mut_ref) => match mut_ref.as_ref() {
-                MutReferenceX::Base(name) => {
-                    ctx.muts
-                        .get(name)
-                        .ok_or(format!("mutable `{}` not declared", name))?;
-                    Ok(())
-                }
-                MutReferenceX::Index(name, t) => {
-                    ctx.muts
-                        .get(name)
-                        .ok_or(format!("mutable `{}` not declared", name))?;
-                    if t.type_check(ctx, local)? == BaseType::Int {
-                        Ok(())
-                    } else {
-                        Err(format!("index to a mutable should be int"))
-                    }
-                }
-                MutReferenceX::Slice(name, t1, t2) => {
-                    ctx.muts
-                        .get(name)
-                        .ok_or(format!("mutable `{}` not declared", name))?;
-                    if let Some(t1) = t1 {
-                        if t1.type_check(ctx, local)? != BaseType::Int {
-                            return Err(format!("index to a mutable should be int"));
-                        }
-                    }
-                    if let Some(t2) = t2 {
-                        if t2.type_check(ctx, local)? != BaseType::Int {
-                            return Err(format!("index to a mutable should be int"));
-                        }
-                    }
-                    Ok(())
-                }
-            },
+            PermissionX::Fraction(_, mut_ref) => mut_ref.type_check(ctx, local).map(|_| ()),
         }
     }
 }
@@ -184,7 +268,7 @@ impl ProcX {
                     .get(c)
                     .ok_or(format!("channel `{}` does not exist", c))?;
 
-                if t.type_check(ctx, local)? != chan_decl.typ {
+                if !t.type_check(ctx, local)?.is_subtype(&chan_decl.typ) {
                     return Err(format!("unmatched send channel type"));
                 }
 
@@ -233,28 +317,14 @@ impl ProcX {
             ProcX::Write(m, t, k) => {
                 // Check t matches the type of the reference
                 let t_typ = t.type_check(ctx, local)?;
-                match m.as_ref() {
-                    MutReferenceX::Base(name) => {
-                        let mut_decl = ctx.muts.get(name).ok_or(format!("mutable `{}` does not exist", name))?;
 
-                        match &mut_decl.typ {
-                            MutType::Base(typ) => if t_typ != *typ {
-                                return Err(format!("unmatched write type: writing term of type `{}` to a mutable of type `{}`", t_typ, typ));
-                            }
-                            MutType::Array(_) => return Err(format!("cannot write to an array type directly")),
-                        }
+                let (m_typ, _) = m.type_check(ctx, local)?;
+                if let MutTypeX::Base(m_base) = m_typ.as_ref() {
+                    if t_typ != *m_base {
+                        return Err(format!("write type is different from mutable type"));
                     }
-                    MutReferenceX::Index(name, _) => {
-                        let mut_decl = ctx.muts.get(name).ok_or(format!("mutable `{}` does not exist", name))?;
-
-                        match &mut_decl.typ {
-                            MutType::Base(..) => return Err(format!("indexing into a non-array mutable")),
-                            MutType::Array(typ) => if t_typ != *typ {
-                                return Err(format!("unmatched write type: writing term of type `{}` to an index of a mutable of type `{}`", t_typ, mut_decl.typ));
-                            }
-                        }
-                    }
-                    MutReferenceX::Slice(..) => return Err(format!("cannot write to a slice")),
+                } else {
+                    return Err(format!("cannot write to a non-base-typed mutable reference"));
                 }
 
                 // Check that we have suitable write permission
@@ -265,31 +335,16 @@ impl ProcX {
             }
             ProcX::Read(m, v, k) => {
                 // Get the return type of the read
-                let typ = match m.as_ref() {
-                    MutReferenceX::Base(name) => {
-                        let mut_decl = ctx.muts.get(name).ok_or(format!("mutable `{}` does not exist", name))?;
-
-                        match &mut_decl.typ {
-                            MutType::Base(typ) => typ,
-                            MutType::Array(_) => return Err(format!("cannot read from an array mutable directly")),
-                        }
-                    }
-                    MutReferenceX::Index(name, _) => {
-                        let mut_decl = ctx.muts.get(name).ok_or(format!("mutable `{}` does not exist", name))?;
-
-                        match &mut_decl.typ {
-                            MutType::Base(..) => return Err(format!("indexing into a non-array mutable")),
-                            MutType::Array(typ) => typ,
-                        }
-                    }
-                    MutReferenceX::Slice(..) => return Err(format!("cannot write to a slice")),
-                };
+                let (m_typ, _) = m.type_check(ctx, local)?;
+                if let MutTypeX::Base(m_base) = m_typ.as_ref() {
+                    // Add read variable into context
+                    local.vars.insert(v.clone(), m_base.clone());
+                } else {
+                    return Err(format!("cannot read from a non-base-typed mutable reference"));
+                }
 
                 // Check that we have suitable read permission
                 constraints.push(PermConstraintX::has_read(&m, &rctx.perm));
-
-                // Add read variable into context
-                local.vars.insert(v.clone(), typ.clone());
 
                 // Check rest of the process
                 k.type_check_inplace(ctx, local, rctx, constraints)
@@ -327,7 +382,7 @@ impl ProcX {
                     let mut subst = IndexMap::new();
 
                     for (arg, param) in args.iter().zip(&proc_decl.params) {
-                        if arg.type_check(ctx, local)? != param.typ {
+                        if !arg.type_check(ctx, local)?.is_subtype(&param.typ) {
                             return Err(format!("unmatched argument type"));
                         }
                         subst.insert(param.name.clone(), arg.clone());
@@ -386,10 +441,7 @@ impl Ctx {
 
         // Check mutable types are all non-reference types
         for decl in self.muts.values() {
-            let base = match &decl.typ {
-                MutType::Base(t) => t,
-                MutType::Array(t) => t,
-            };
+            let base = decl.typ.get_base_type();
             match base {
                 BaseType::Bool => Ok(()),
                 BaseType::Int => Ok(()),

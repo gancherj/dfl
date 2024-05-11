@@ -29,8 +29,9 @@ pub type MutReference = Rc<MutReferenceX>;
 #[derive(Debug)]
 pub enum MutReferenceX {
     Base(MutName),
-    Index(MutName, Term),
-    Slice(MutName, Option<Term>, Option<Term>),
+    Deref(Term),
+    Index(MutReference, Term),
+    Slice(MutReference, Option<Term>, Option<Term>),
 }
 
 pub type Permission = Rc<PermissionX>;
@@ -50,10 +51,11 @@ pub enum BaseType {
     Ref(Rc<[MutName]>),
 }
 
+pub type MutType = Rc<MutTypeX>;
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub enum MutType {
+pub enum MutTypeX {
     Base(BaseType),
-    Array(BaseType),
+    Array(MutType),
 }
 
 pub type Term = Rc<TermX>;
@@ -63,6 +65,8 @@ pub enum TermX {
     Const(Const),
     Bool(bool),
     Int(i64),
+
+    Ref(MutReference),
 
     Add(Term, Term),
     Mul(Term, Term),
@@ -275,6 +279,14 @@ impl TermX {
             TermX::Const(..) => None,
             TermX::Bool(..) => None,
             TermX::Int(..) => None,
+            TermX::Ref(m) => {
+                let m_subst = MutReferenceX::substitute_inplace(m, subst);
+                if m_subst.is_some() {
+                    Some(Rc::new(TermX::Ref(m_subst.unwrap())))
+                } else {
+                    None
+                }
+            }
             TermX::Add(t1, t2) => {
                 let t1_subst = Self::substitute_inplace(t1, subst);
                 let t2_subst = Self::substitute_inplace(t2, subst);
@@ -357,6 +369,9 @@ impl TermX {
             TermX::Const(..) => {}
             TermX::Bool(..) => {}
             TermX::Int(..) => {}
+            TermX::Ref(m) => {
+                m.free_vars_inplace(vars);
+            }
             TermX::Add(t1, t2) => {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
@@ -396,6 +411,7 @@ impl TermX {
             TermX::Const(..) => 0,
             TermX::Bool(..) => 0,
             TermX::Int(..) => 0,
+            TermX::Ref(..) => 0,
             TermX::Add(..) => 2,
             TermX::Mul(..) => 1,
             TermX::And(..) => 5,
@@ -406,24 +422,69 @@ impl TermX {
     }
 }
 
+impl MutTypeX {
+    pub fn get_base_type(&self) -> &BaseType {
+        match self {
+            MutTypeX::Base(t) => t,
+            MutTypeX::Array(t) => t.get_base_type(),
+        }
+    }
+}
+
 impl MutReferenceX {
+    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+        match self {
+            MutReferenceX::Base(..) => {}
+            MutReferenceX::Deref(t) => {
+                t.free_vars_inplace(vars);
+            }
+            MutReferenceX::Index(m, t) => {
+                m.free_vars_inplace(vars);
+                TermX::free_vars_inplace(t, vars);
+            }
+            MutReferenceX::Slice(m, t1, t2) => {
+                m.free_vars_inplace(vars);
+                if let Some(t1) = t1 {
+                    TermX::free_vars_inplace(t1, vars);
+                }
+                if let Some(t2) = t2 {
+                    TermX::free_vars_inplace(t2, vars);
+                }
+            }
+        }
+    }
+
     /// Returns None if unchanged
     fn substitute_inplace(mut_ref: &MutReference, subst: &IndexMap<Var, Term>) -> Option<MutReference> {
         match mut_ref.as_ref() {
-            MutReferenceX::Base(_) => None,
-            MutReferenceX::Index(m, t) => {
+            MutReferenceX::Base(..) => None,
+            MutReferenceX::Deref(t) => {
                 let t_subst = TermX::substitute_inplace(t, subst);
                 if t_subst.is_some() {
-                    Some(Rc::new(MutReferenceX::Index(m.clone(), t_subst.unwrap())))
+                    Some(Rc::new(MutReferenceX::Deref(t_subst.unwrap())))
+                } else {
+                    None
+                }
+            }
+            MutReferenceX::Index(m, t) => {
+                let m_subst = Self::substitute_inplace(m, subst);
+                let t_subst = TermX::substitute_inplace(t, subst);
+                if m_subst.is_some() || t_subst.is_some() {
+                    Some(Rc::new(MutReferenceX::Index(
+                        m_subst.unwrap_or(m.clone()),
+                        t_subst.unwrap_or(t.clone()),
+                    )))
                 } else {
                     None
                 }
             }
             MutReferenceX::Slice(m, t1, t2) => {
+                let m_subst = Self::substitute_inplace(m, subst);
                 let t1_subst = t1.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
                 let t2_subst = t2.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Rc::new(MutReferenceX::Slice(m.clone(),
+                if m_subst.is_some() || t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Rc::new(MutReferenceX::Slice(
+                        m_subst.unwrap_or(m.clone()),
                         if t1.is_some() { Some(t1_subst.unwrap_or(t1.as_ref().unwrap().clone())) } else { None },
                         if t2.is_some() { Some(t2_subst.unwrap_or(t2.as_ref().unwrap().clone())) } else { None },
                     )))
@@ -681,20 +742,9 @@ impl PermissionX {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }
-            PermissionX::Fraction(_, mut_ref) => match mut_ref.as_ref() {
-                MutReferenceX::Base(..) => {}
-                MutReferenceX::Index(_, t) => {
-                    t.free_vars_inplace(vars);
-                }
-                MutReferenceX::Slice(_, t1, t2) => {
-                    if let Some(t1) = t1 {
-                        t1.free_vars_inplace(vars);
-                    }
-                    if let Some(t2) = t2 {
-                        t2.free_vars_inplace(vars);
-                    }
-                }
-            },
+            PermissionX::Fraction(_, mut_ref) => {
+                mut_ref.free_vars_inplace(vars);
+            }
         }
     }
 
@@ -783,11 +833,11 @@ impl fmt::Display for BaseType {
     }
 }
 
-impl fmt::Display for MutType {
+impl fmt::Display for MutTypeX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            MutType::Base(base) => write!(f, "{}", base),
-            MutType::Array(base) => write!(f, "[{}]", base),
+            MutTypeX::Base(base) => write!(f, "{}", base),
+            MutTypeX::Array(base) => write!(f, "[{}]", base),
         }
     }
 }
@@ -799,6 +849,7 @@ impl fmt::Display for TermX {
             TermX::Const(c) => write!(f, "{}", c),
             TermX::Bool(b) => write!(f, "{}", b),
             TermX::Int(i) => write!(f, "{}", i),
+            TermX::Ref(m) => write!(f, "&{}", m),
             TermX::Add(t1, t2) => {
                 if t1.precedence() <= self.precedence() {
                     write!(f, "{}", t1)?;
@@ -889,10 +940,16 @@ impl fmt::Display for MutReferenceX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MutReferenceX::Base(name) => write!(f, "{}", name),
-            MutReferenceX::Index(name, t) => write!(f, "{}[{}]", name, t),
-            MutReferenceX::Slice(name, t1, t2) =>
+            MutReferenceX::Deref(t) =>
+                if TermX::precedence(t) > 0 {
+                    write!(f, "*{}", t)
+                } else {
+                    write!(f, "*({})", t)
+                }
+            MutReferenceX::Index(m, t) => write!(f, "{}[{}]", m, t),
+            MutReferenceX::Slice(m, t1, t2) =>
                 write!(
-                    f, "{}[{}..{}]", name,
+                    f, "{}[{}..{}]", m,
                     t1.as_ref().unwrap_or(&Rc::new(TermX::Var(Var::from("")))),
                     t2.as_ref().unwrap_or(&Rc::new(TermX::Var(Var::from("")))),
                 ),
