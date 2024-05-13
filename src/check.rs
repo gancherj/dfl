@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
@@ -332,12 +333,17 @@ impl ProcX {
 
                 // Check that we have suitable write permission
                 // (for all possibly referenced mutables)
-                // TODO: this is unsound since the reference may be pointing to a different start location
-                for m_name in &m_names {
-                    constraints.push(PermConstraintX::has_write(
-                        &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
-                        &rctx.perm,
-                    ));
+                // TODO: simplify m
+                if m.is_simple() {
+                    constraints.push(PermConstraintX::has_write(m, &rctx.perm));
+                } else {
+                    for m_name in &m_names {
+                        constraints.push(PermConstraintX::has_write(
+                            &Rc::new(MutReferenceX::Base(m_name.clone())),
+                            // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
+                            &rctx.perm,
+                        ));
+                    }
                 }
 
                 // Check rest of the process
@@ -355,11 +361,18 @@ impl ProcX {
 
                 // Check that we have suitable read permission
                 // (for all possibly referenced mutables)
-                for m_name in &m_names {
-                    constraints.push(PermConstraintX::has_read(
-                        &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
-                        &rctx.perm,
-                    ));
+                // TODO: simplify m
+                if m.is_simple() {
+                    constraints.push(PermConstraintX::has_read(m, &rctx.perm));
+                } else {
+                    // Overapproximate and require the permission of the entire mutable
+                    for m_name in &m_names {
+                        constraints.push(PermConstraintX::has_read(
+                            &Rc::new(MutReferenceX::Base(m_name.clone())),
+                            // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
+                            &rctx.perm,
+                        ));
+                    }
                 }
 
                 // Check rest of the process

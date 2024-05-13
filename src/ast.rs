@@ -446,6 +446,16 @@ impl MutTypeX {
 }
 
 impl MutReferenceX {
+    /// Check if the base type is a direct reference instead of a deref
+    pub fn is_simple(&self) -> bool {
+        match self {
+            MutReferenceX::Base(..) => true,
+            MutReferenceX::Deref(..) => false,
+            MutReferenceX::Index(m, ..) => m.is_simple(),
+            MutReferenceX::Slice(m, ..) => m.is_simple(),
+        }
+    }
+
     fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
         match self {
             MutReferenceX::Base(..) => {}
