@@ -151,6 +151,8 @@ Decl: Decl = {
     "mut" <n:MutName> ":" <t:MutType> => Decl::Mut(Rc::new(MutDeclX { name: n, typ: t })),
     "chan" <n:ChanName> ":" <t:BaseTypeWithRef> "|" <p:Permission> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: p })),
+    "chan" <n:ChanName> ":" <t:BaseTypeWithRef> =>
+        Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: Rc::new(PermissionX::Empty) })),
     "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" <r:CommaSep<ProcResource>> "=" <b:Proc> =>
         Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: r, body: b })),
     "proc" <n:ProcName> <p:CommaSep<ProcParam>> "=" <b:Proc> =>

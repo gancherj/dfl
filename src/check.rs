@@ -192,11 +192,20 @@ impl TermX {
             },
             TermX::Bool(_) => Ok(BaseType::Bool),
             TermX::Int(_) => Ok(BaseType::Int),
-            TermX::Add(t1, t2) | TermX::Mul(t1, t2) | TermX::Less(t1, t2) => {
+            TermX::Add(t1, t2) | TermX::Mul(t1, t2) => {
                 let typ1 = t1.type_check(ctx, local)?;
                 let typ2 = t2.type_check(ctx, local)?;
                 if typ1 == typ2 && typ1 == BaseType::Int {
                     Ok(BaseType::Int)
+                } else {
+                    Err(format!("incorrect subterm type"))
+                }
+            }
+            TermX::Less(t1, t2) => {
+                let typ1 = t1.type_check(ctx, local)?;
+                let typ2 = t2.type_check(ctx, local)?;
+                if typ1 == typ2 && typ1 == BaseType::Int {
+                    Ok(BaseType::Bool)
                 } else {
                     Err(format!("incorrect subterm type"))
                 }
