@@ -133,6 +133,7 @@ pub struct ProcDeclX {
     pub name: ProcName,
     pub params: Vec<ProcParam>,
     pub res: Vec<ProcResource>,
+    pub all_res: bool,
     pub body: Proc,
 }
 
@@ -184,6 +185,10 @@ impl Ctx {
         }
     }
 
+    /// Process a parsed AST into a context
+    /// This do some preprocessing including
+    /// replacing constants and some notations like
+    /// "all" resources
     pub fn from(prog: &Program) -> Result<Ctx, String> {
         let mut ctx = Ctx::new();
         let mut subst = IndexMap::new();
@@ -207,8 +212,8 @@ impl Ctx {
                 _ => {}
             }
         }
-        
-        // Collect all other declarations while converting some Var to Const
+
+        // Collect channel declarations converting some Var to Const
         for decl in &prog.decls {
             match decl {
                 Decl::Chan(decl) => {
@@ -222,6 +227,14 @@ impl Ctx {
                         perm: PermissionX::substitute(&decl.perm, &subst),
                     }));
                 }
+                _ => {}
+            }
+        }
+        
+        // Collect process declarations while converting some Var to Const
+        // and also expanding "all" resource notation
+        for decl in &prog.decls {
+            match decl {
                 Decl::Proc(decl) => {
                     if ctx.procs.contains_key(&decl.name) {
                         return Err(format!("duplicate process definition {:?}", decl.name));
@@ -229,12 +242,31 @@ impl Ctx {
 
                     // Copy new resources with constants substituted
                     let mut new_res = Vec::new();
-                    for res in &decl.res {
-                        let res_subst = match res.as_ref() {
-                            ProcResourceX::Perm(p) => Rc::new(ProcResourceX::Perm(PermissionX::substitute(p, &subst))),
-                            _ => res.clone(),
-                        };
-                        new_res.push(res_subst);
+
+                    if decl.all_res {
+                        // The process should have all mutable and channel resources in the context
+                        for mut_name in ctx.muts.keys() {
+                            // Add write permission to mut_name
+                            new_res.push(Rc::new(ProcResourceX::Perm(
+                                Rc::new(PermissionX::Fraction(
+                                    PermFraction::Write,
+                                    Rc::new(MutReferenceX::Base(mut_name.clone())),
+                                ),
+                            ))));
+                        }
+
+                        for chan_name in ctx.chans.keys() {
+                            new_res.push(Rc::new(ProcResourceX::Input(chan_name.clone())));
+                            new_res.push(Rc::new(ProcResourceX::Output(chan_name.clone())));
+                        }
+                    } else {
+                        for res in &decl.res {
+                            let res_subst = match res.as_ref() {
+                                ProcResourceX::Perm(p) => Rc::new(ProcResourceX::Perm(PermissionX::substitute(p, &subst))),
+                                _ => res.clone(),
+                            };
+                            new_res.push(res_subst);
+                        }
                     }
 
                     // Copy a new substitution with process parameters shadowed
@@ -253,6 +285,7 @@ impl Ctx {
                         name: decl.name.clone(),
                         params: decl.params.iter().map(|p| p.clone()).collect(),
                         res: new_res,
+                        all_res: false,
                         body: new_body,
                     }));
                 }

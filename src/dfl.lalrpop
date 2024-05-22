@@ -154,9 +154,11 @@ Decl: Decl = {
     "chan" <n:ChanName> ":" <t:BaseTypeWithRef> =>
         Decl::Chan(Rc::new(ChanDeclX { name: n, typ: t, perm: Rc::new(PermissionX::Empty) })),
     "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" <r:CommaSep<ProcResource>> "=" <b:Proc> =>
-        Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: r, body: b })),
+        Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: r, all_res: false, body: b })),
     "proc" <n:ProcName> <p:CommaSep<ProcParam>> "=" <b:Proc> =>
-        Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: Vec::new(), body: b })),
+        Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: Vec::new(), all_res: false, body: b })),
+    "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" "all" "=" <b:Proc> =>
+        Decl::Proc(Rc::new(ProcDeclX { name: n, params: p, res: Vec::new(), all_res: true, body: b })),
 }
 
 pub Program: Program = { Decl* => Program { decls: <> } }

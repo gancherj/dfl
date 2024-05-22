@@ -1,3 +1,10 @@
+/**
+ * Semantically, for example,
+ * if mut A: [[int]]
+ * [write A] := write A[i][j] for all i, j
+ * [write A[n..m]] := write A[i][j] for any n <= i < m, and any j
+ */
+
 /// AST for permission constraints
 
 use std::fmt;
