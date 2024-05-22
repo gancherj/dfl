@@ -8,6 +8,7 @@ use std::io;
 use std::io::{Write, BufReader};
 use wait_timeout::ChildExt;
 use std::time::Duration;
+use indexmap::IndexMap;
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Sort {
@@ -37,8 +38,23 @@ pub enum TermX {
     Var(Ident),
     Int(u64),
     Bool(bool),
-    App(Ident, Vec<Term>),
+    App(Term, Vec<Term>),
     Quant(QuantKind, Vec<SortedVar>, Term),
+}
+
+pub type ConstDecl = Rc<ConstDeclX>;
+#[derive(Debug)]
+pub struct ConstDeclX {
+    pub name: Ident,
+    pub sort: Sort,
+}
+
+pub type FunDecl = Rc<FunDeclX>;
+#[derive(Debug)]
+pub struct FunDeclX {
+    pub name: Ident,
+    pub inputs: Vec<Sort>,
+    pub sort: Sort,
 }
 
 pub type Command = Rc<CommandX>;
@@ -46,8 +62,8 @@ pub type Command = Rc<CommandX>;
 pub enum CommandX {
     Push,
     Pop,
-    DeclareConst(Ident, Sort),
-    DeclareFun(Ident, Vec<Sort>, Sort),
+    DeclareConst(ConstDecl),
+    DeclareFun(FunDecl),
     Assert(Term),
     CheckSat,
     GetModel,
@@ -62,6 +78,93 @@ pub struct Solver {
     stdout: BufReader<process::ChildStdout>,
 }
 
+/// Used when encoding stuff into SMT
+/// This keeps track of things like fresh
+/// variables/functions, etc.
+pub struct EncodingCtx {
+    prefix: String,
+    fresh_var_count: u64,
+    consts: IndexMap<Ident, ConstDecl>,
+    funs: IndexMap<Ident, FunDecl>,
+}
+
+impl EncodingCtx {
+    pub fn new(prefix: impl Into<String>) -> EncodingCtx {
+        EncodingCtx {
+            prefix: prefix.into(),
+            fresh_var_count: 0,
+            consts: IndexMap::new(),
+            funs: IndexMap::new(),
+        }
+    }
+
+    /// Generate a variable with the given name and sort
+    /// If the variable already exists, return the same one
+    pub fn new_var(&mut self, name: impl AsRef<str>, sort: Sort) -> Ident {
+        let name: Ident = format!("{}_{}", self.prefix, name.as_ref()).into();
+        if self.consts.contains_key(&name) {
+            assert!(self.consts.get(&name).unwrap().sort == sort);
+        } else {
+            self.consts.insert(name.clone(), Rc::new(ConstDeclX {
+                name: name.clone(),
+                sort: sort,
+            }));
+        }
+        name
+    }
+
+    /// Generate a fresh variable of the given sort
+    pub fn fresh_var(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
+        // Find the next fresh name
+        let mut name;
+        loop {
+            name = Ident::from(format!("{}_{}_{}", self.prefix, prefix.as_ref(), self.fresh_var_count));
+            self.fresh_var_count += 1;
+            if !self.consts.contains_key(&name) {
+                break
+            }
+        }
+        self.consts.insert(name.clone(), Rc::new(ConstDeclX {
+            name: name.clone(),
+            sort: sort,
+        }));
+        name
+    }
+
+    /// Generate a fresh function of the given sort
+    pub fn fresh_fun(&mut self, prefix: impl AsRef<str>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Ident {
+        // Find the next fresh name
+        let mut name;
+        loop {
+            name = Ident::from(format!("{}_{}_{}", self.prefix, prefix.as_ref(), self.fresh_var_count));
+            self.fresh_var_count += 1;
+            if !self.consts.contains_key(&name) {
+                break
+            }
+        }
+        self.funs.insert(name.clone(), Rc::new(FunDeclX {
+            name: name.clone(),
+            inputs: inputs.into_iter().collect(),
+            sort: sort,
+        }));
+        name
+    }
+
+    pub fn to_commands(&mut self) -> Vec<Command> {
+        let mut cmds = Vec::new();
+
+        for c in self.consts.values() {
+            cmds.push(Rc::new(CommandX::DeclareConst(c.clone())));
+        }
+
+        for f in self.funs.values() {
+            cmds.push(Rc::new(CommandX::DeclareFun(f.clone())));
+        }
+
+        cmds
+    }
+}
+
 pub enum SatResult {
     Sat,
     Unsat,
@@ -74,6 +177,12 @@ impl<T: AsRef<str>> From<T> for Ident {
     }
 }
 
+impl From<&Ident> for Ident {
+    fn from(id: &Ident) -> Ident {
+        id.clone()
+    }
+}
+
 impl TermX {
     pub fn int(i: u64) -> Term {
         Rc::new(TermX::Int(i))
@@ -83,22 +192,67 @@ impl TermX {
         Rc::new(TermX::Bool(b))
     }
 
-    pub fn var<S: AsRef<str>>(id: S) -> Term {
-        Rc::new(TermX::Var(Ident::from(id)))
+    pub fn var(id: impl Into<Ident>) -> Term {
+        Rc::new(TermX::Var(id.into()))
     }
 
-    pub fn app<S: AsRef<str>, T: Borrow<Term>, I: IntoIterator<Item=T>>(id: S, args: I) -> Term {
-        Rc::new(TermX::App(Ident::from(id), args.into_iter().map(|a| a.borrow().clone()).collect()))
+    pub fn app(id: impl Into<Ident>, args: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
+        Rc::new(TermX::App(TermX::var(id), args.into_iter().map(|a| a.borrow().clone()).collect()))
     }
 
     pub fn add(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("+", [a.borrow(), b.borrow()])
     }
 
+    pub fn mul(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("*", [a.borrow(), b.borrow()])
+    }
+
+    pub fn and(conj: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
+        TermX::app("and", conj)
+    }
+
+    pub fn or(conj: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
+        TermX::app("or", conj)
+    }
+
+    pub fn not(a: impl Borrow<Term>) -> Term {
+        TermX::app("not", [a.borrow()])
+    }
+
+    pub fn implies(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("=>", [a.borrow(), b.borrow()])
+    }
+
+    pub fn eq(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("=", [a.borrow(), b.borrow()])
+    }
+
     pub fn lt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("<", [a.borrow(), b.borrow()])
     }
+
+    pub fn lte(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("<=", [a.borrow(), b.borrow()])
+    }
     
+    pub fn neg(a: impl Borrow<Term>) -> Term {
+        TermX::app("-", [a.borrow()])
+    }
+
+    pub fn ite(c: impl Borrow<Term>, t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        TermX::app("ite", [c.borrow(), t1.borrow(), t2.borrow()])
+    }
+
+    pub fn forall(vars: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, body: impl Borrow<Term>) -> Term {
+        Rc::new(TermX::Quant(
+            QuantKind::Forall,
+            vars.into_iter()
+                .map(|(name, sort)| SortedVar { name: name.into(), sort: sort })
+                .collect(),
+            body.borrow().clone(),
+        ))
+    }
 }
 
 impl CommandX {
@@ -114,12 +268,34 @@ impl CommandX {
         Rc::new(CommandX::Exit)
     }
 
-    pub fn declare_const<S: AsRef<str>>(id: S, sort: Sort) -> Command {
-        Rc::new(CommandX::DeclareConst(Ident::from(id), sort))
+    pub fn push() -> Command {
+        Rc::new(CommandX::Push)
+    }
+
+    pub fn pop() -> Command {
+        Rc::new(CommandX::Pop)
+    }
+
+    pub fn declare_const(id: impl Into<Ident>, sort: Sort) -> Command {
+        Rc::new(CommandX::DeclareConst(Rc::new(ConstDeclX { name: id.into(), sort: sort })))
     }
 
     pub fn assert(term: impl Borrow<Term>) -> Command {
         Rc::new(CommandX::Assert(term.borrow().clone()))
+    }
+
+    pub fn set_logic(logic: impl Into<String>) -> Command {
+        Rc::new(CommandX::SetLogic(logic.into()))
+    }
+
+    pub fn set_option(option: impl IntoIterator<Item=impl Into<String>>) -> Command {
+        Rc::new(CommandX::SetOption(option.into_iter().map(|s| s.into()).collect()))
+    }
+}
+
+impl Drop for Solver {
+    fn drop(&mut self) {
+        self.close().expect("fail to close solver process");
     }
 }
 
@@ -197,8 +373,24 @@ impl Solver {
         Ok(output)
     }
 
+    pub fn set_option(&mut self, option: impl IntoIterator<Item=impl Into<String>>) -> io::Result<()> {
+        self.send_command(CommandX::set_option(option))
+    }
+
+    pub fn set_logic(&mut self, logic: impl Into<String>) -> io::Result<()> {
+        self.send_command(CommandX::set_logic(logic))
+    }
+
     pub fn assert(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
         self.send_command(CommandX::assert(term))
+    }
+
+    pub fn push(&mut self) -> io::Result<()> {
+        self.send_command(CommandX::push())
+    }
+
+    pub fn pop(&mut self) -> io::Result<()> {
+        self.send_command(CommandX::pop())
     }
 
     pub fn check_sat(&mut self) -> io::Result<SatResult> {
@@ -269,23 +461,33 @@ impl fmt::Display for TermX {
     }
 }
 
+impl fmt::Display for ConstDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(declare-const {} {})", self.name, self.sort)
+    }
+}
+
+impl fmt::Display for FunDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(declare-fun {} (", self.name)?;
+        for (pos, sort) in self.inputs.iter().enumerate() {
+            if pos == 0 {
+                write!(f, "{}", sort)?;
+            } else {
+                write!(f, " {}", sort)?;
+            }
+        }
+        write!(f, ") {})", self.sort)
+    }
+}
+
 impl fmt::Display for CommandX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CommandX::Push => write!(f, "(push)"),
             CommandX::Pop => write!(f, "(pop)"),
-            CommandX::DeclareConst(id, sort) => write!(f, "(declare-const {} {})", id, sort),
-            CommandX::DeclareFun(id, arg_sorts, sort) => {
-                write!(f, "(declare-fun {} (", id)?;
-                for (pos, sort) in arg_sorts.iter().enumerate() {
-                    if pos == 0 {
-                        write!(f, "{}", sort)?;
-                    } else {
-                        write!(f, " {}", sort)?;
-                    }
-                }
-                write!(f, ") {})", sort)
-            }
+            CommandX::DeclareConst(decl) => write!(f, "{}", decl),
+            CommandX::DeclareFun(decl) => write!(f, "{}", decl),
             CommandX::Assert(t) => write!(f, "(assert {})", t),
             CommandX::CheckSat => write!(f, "(check-sat)"),
             CommandX::GetModel => write!(f, "(get-model)"),

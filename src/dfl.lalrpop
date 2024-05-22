@@ -62,7 +62,7 @@ ProcParam: ProcParam = {
 
 PermFraction: PermFraction = {
     "write" => PermFraction::Write,
-    "read" "(" <k:PositiveInt> ")" => PermFraction::Read(k),
+    "read" "(" <k:UnsignedInt> ")" => PermFraction::Read(k),
 }
 
 MutReference: MutReference = {

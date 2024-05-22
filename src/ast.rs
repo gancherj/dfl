@@ -1,8 +1,7 @@
-use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct MutName(pub Rc<str>);
@@ -394,7 +393,7 @@ impl TermX {
         Self::substitute_inplace(term, subst).unwrap_or(term.clone())
     }
 
-    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+    fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             TermX::Var(var) => {
                 vars.insert(var.clone());
@@ -431,8 +430,8 @@ impl TermX {
         }
     }
 
-    pub fn free_vars(&self) -> HashSet<Var> {
-        let mut vars = HashSet::new();
+    pub fn free_vars(&self) -> IndexSet<Var> {
+        let mut vars = IndexSet::new();
         self.free_vars_inplace(&mut vars);
         return vars;
     }
@@ -476,6 +475,13 @@ impl MutTypeX {
             MutTypeX::Array(t) => t.get_base_type(),
         }
     }
+
+    pub fn get_dimensions(&self) -> usize {
+        match self {
+            MutTypeX::Base(..) => 0,
+            MutTypeX::Array(t) => t.get_dimensions() + 1,
+        }
+    }
 }
 
 impl MutReferenceX {
@@ -489,7 +495,7 @@ impl MutReferenceX {
         }
     }
 
-    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+    fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             MutReferenceX::Base(..) => {}
             MutReferenceX::Deref(t) => {
@@ -795,7 +801,7 @@ impl PermissionX {
         PermissionX::substitute(perm, &IndexMap::from([ (var.clone(), subterm.clone()) ]))
     }
 
-    fn free_vars_inplace(&self, vars: &mut HashSet<Var>) {
+    fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             PermissionX::Empty => {}
             PermissionX::Add(p1, p2) => {
@@ -817,8 +823,8 @@ impl PermissionX {
         }
     }
 
-    pub fn free_vars(&self) -> HashSet<Var> {
-        let mut vars = HashSet::new();
+    pub fn free_vars(&self) -> IndexSet<Var> {
+        let mut vars = IndexSet::new();
         self.free_vars_inplace(&mut vars);
         return vars;
     }

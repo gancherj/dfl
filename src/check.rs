@@ -1,8 +1,11 @@
+use std::fmt;
 use std::rc::Rc;
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
 use crate::permission::*;
+use crate::smt;
+use crate::smt::EncodingCtx;
 
 /**
  * Type checking:
@@ -22,6 +25,20 @@ pub struct ResourceCtx {
     pub perm: Permission,
     pub ins: IndexSet<ChanName>,
     pub outs: IndexSet<ChanName>,
+}
+
+impl fmt::Display for LocalCtx {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{{")?;
+        for (i, (v, t)) in self.vars.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}: {}", v, t)?;
+            } else {
+                write!(f, ", {}: {}", v, t)?;
+            }
+        }
+        write!(f, "}}")
+    }
 }
 
 impl BaseType {
@@ -270,7 +287,7 @@ impl ProcX {
         ctx: &Ctx,
         local: &mut LocalCtx,
         rctx: &mut ResourceCtx,
-        constraints: &mut Vec<PermConstraint>,
+        constraints: &mut Vec<(PermConstraint, LocalCtx)>,
     ) -> Result<(), String> {
         match self {
             ProcX::Skip => Ok(()),
@@ -296,7 +313,7 @@ impl ProcX {
                     &Var::from(&chan_decl.name),
                     t,
                 );
-                constraints.push(PermConstraintX::less_eq(&send_perm, &rctx.perm));
+                constraints.push((PermConstraintX::less_eq(&send_perm, &rctx.perm), local.clone()));
                 rctx.perm = PermissionX::sub(&rctx.perm, &send_perm);
 
                 // Check rest of the process
@@ -344,14 +361,14 @@ impl ProcX {
                 // (for all possibly referenced mutables)
                 // TODO: simplify m
                 if m.is_simple() {
-                    constraints.push(PermConstraintX::has_write(m, &rctx.perm));
+                    constraints.push((PermConstraintX::has_write(m, &rctx.perm), local.clone()));
                 } else {
                     for m_name in &m_names {
-                        constraints.push(PermConstraintX::has_write(
+                        constraints.push((PermConstraintX::has_write(
                             &Rc::new(MutReferenceX::Base(m_name.clone())),
                             // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
                             &rctx.perm,
-                        ));
+                        ), local.clone()));
                     }
                 }
 
@@ -361,27 +378,29 @@ impl ProcX {
             ProcX::Read(m, v, k) => {
                 // Get the return type of the read
                 let (m_typ, m_names, _) = m.type_check(ctx, local)?;
-                if let MutTypeX::Base(m_base) = m_typ.as_ref() {
-                    // Add read variable into context
-                    local.vars.insert(v.clone(), m_base.clone());
-                } else {
-                    return Err(format!("cannot read from a non-base-typed mutable reference"));
-                }
 
                 // Check that we have suitable read permission
                 // (for all possibly referenced mutables)
                 // TODO: simplify m
                 if m.is_simple() {
-                    constraints.push(PermConstraintX::has_read(m, &rctx.perm));
+                    constraints.push((PermConstraintX::has_read(m, &rctx.perm), local.clone()));
                 } else {
                     // Overapproximate and require the permission of the entire mutable
                     for m_name in &m_names {
-                        constraints.push(PermConstraintX::has_read(
+                        constraints.push((PermConstraintX::has_read(
                             &Rc::new(MutReferenceX::Base(m_name.clone())),
                             // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
                             &rctx.perm,
-                        ));
+                        ), local.clone()));
                     }
+                }
+
+                // Update local context with new binding
+                if let MutTypeX::Base(m_base) = m_typ.as_ref() {
+                    // Add read variable into context
+                    local.vars.insert(v.clone(), m_base.clone());
+                } else {
+                    return Err(format!("cannot read from a non-base-typed mutable reference"));
                 }
 
                 // Check rest of the process
@@ -432,7 +451,7 @@ impl ProcX {
                             ProcResourceX::Perm(p) => {
                                 // Should have enough resource to call the process
                                 let p_subst = PermissionX::substitute(p, &subst);
-                                constraints.push(PermConstraintX::less_eq(&p_subst, &rctx.perm));
+                                constraints.push((PermConstraintX::less_eq(&p_subst, &rctx.perm), local.clone()));
                                 rctx.perm = PermissionX::sub(&rctx.perm, &p_subst);
                             },
 
@@ -463,7 +482,7 @@ impl ProcX {
         }
     }
 
-    pub fn type_check(&self, ctx: &Ctx, local: &LocalCtx, rctx: &ResourceCtx) -> Result<Vec<PermConstraint>, String> {
+    pub fn type_check(&self, ctx: &Ctx, local: &LocalCtx, rctx: &ResourceCtx) -> Result<Vec<(PermConstraint, LocalCtx)>, String> {
         let mut local_copy = local.clone();
         let mut rctx_copy = rctx.clone();
         let mut constraints = Vec::new();
@@ -474,7 +493,7 @@ impl ProcX {
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(&self) -> Result<(), String> {
+    pub fn type_check(&self, solver: &mut smt::Solver) -> Result<(), String> {
         // Mutables types are base types and are always correct
 
         // Check mutable types are all non-reference types
@@ -533,12 +552,47 @@ impl Ctx {
                 }
             }
 
+            // TODO: better error handling
+            let mut smt_constraints = Vec::new();
+            let mut smt_ctx = EncodingCtx::new("perm");
             let constraints = decl.body.type_check(self, &local, &rctx)?;
 
-            println!("permission constraints for process `{}`:", decl.name);
-            for constraint in constraints {
-                println!("  {}", constraint);
+            solver.push().expect("failed to push");
+
+            println!("checking permissions for `{}`:", decl.name);
+            // Convert permission constraints to SMT constraints
+            for (constraint, local) in &constraints {
+                smt_constraints.push(constraint.encode_invalidity(&mut smt_ctx, self, local, 5).unwrap());
             }
+
+            // Send context commands
+            for cmd in smt_ctx.to_commands() {
+                solver.send_command(cmd).expect("failed to send command");
+            }
+
+            // Send assertions and check for validity
+            for (smt_constraint, (constraint, local)) in smt_constraints.iter().zip(constraints.iter()) {
+                solver.assert(smt_constraint).expect("failed to assert");
+
+                match solver.check_sat().unwrap() {
+                    smt::SatResult::Sat => {
+                        let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
+                        println!("not valid: {} |= {}", local, constraint);
+                        println!("encoding: {}", smt_constraint);
+                        print!("model: {}", result);
+                        break;
+                    }
+                    smt::SatResult::Unsat => {
+                        println!("valid: {} |= {}", local, constraint);
+                    }
+                    smt::SatResult::Unknown => {
+                        println!("unknown: {} |= {}", local, constraint);
+                        break;
+                    }
+                }
+            }
+
+            solver.pop().expect("failed to pop");
         }
 
         Ok(())

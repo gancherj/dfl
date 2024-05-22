@@ -7,6 +7,7 @@ pub mod permission;
 pub mod smt;
 
 use crate::ast::*;
+use crate::smt::EncodingCtx;
 
 use lalrpop_util::lalrpop_mod;
 
@@ -44,12 +45,14 @@ fn main() {
         let fp = &args[1];
         let contents = fs::read_to_string(fp).expect("Unknown file");
         let parsed = dfl::ProgramParser::new().parse(&contents);
+        let mut solver = smt::Solver::new("z3", &["-in"]).expect("failed to create solver");
+
         match parsed {
             Ok(program) => {
                 println!("Parsing success!");
                 let ctx = Ctx::from(&program).unwrap();
                 println!("{:?}", ctx);
-                ctx.type_check().unwrap();
+                ctx.type_check(&mut solver).unwrap();
             }
             Err(e) => println!("Parse error: {}", e),
         }
