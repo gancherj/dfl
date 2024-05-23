@@ -10,6 +10,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use im::Vector;
 use indexmap::IndexMap;
 
 use crate::{ast::*, check::LocalCtx, smt::{self, EncodingCtx}, span::Spanned};
@@ -26,7 +27,7 @@ pub enum PermConstraintX {
 #[derive(Debug)]
 pub struct PermJudgment {
     pub local: LocalCtx,
-    pub local_constraints: Vec<Term>,
+    pub local_constraints: Vector<Term>,
     pub perm_constraint: PermConstraint,
 }
 

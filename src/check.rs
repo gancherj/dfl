@@ -1,4 +1,5 @@
 use std::fmt;
+use im::Vector;
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
@@ -276,7 +277,7 @@ impl ProcX {
         ctx: &Ctx,
         local: &mut LocalCtx,
         rctx: &mut ResourceCtx,
-        mut path_conditions: Vec<Term>,
+        mut path_conditions: Vector<Term>,
         constraints: &mut Vec<PermJudgment>,
     ) -> Result<(), Error> {
         match &proc.x {
@@ -436,11 +437,11 @@ impl ProcX {
                 let mut local_copy = local.clone();
                 let mut res_copy = rctx.clone();
 
-                let mut path_conditions_copy: Vec<std::rc::Rc<Spanned<TermX>>> = path_conditions.clone();
+                let mut path_conditions_copy = path_conditions.clone();
 
                 // Push respective path conditions
-                path_conditions.push(t.clone());
-                path_conditions_copy.push(TermX::not(t));
+                path_conditions.push_back(t.clone());
+                path_conditions_copy.push_back(TermX::not(t));
 
                 ProcX::type_check_inplace(k1, ctx, local, rctx, path_conditions, constraints)
                     .and(ProcX::type_check_inplace(k2, ctx, &mut local_copy, &mut res_copy, path_conditions_copy, constraints))
@@ -521,7 +522,7 @@ impl ProcX {
         let mut local_copy = local.clone();
         let mut rctx_copy = rctx.clone();
         let mut constraints = Vec::new();
-        ProcX::type_check_inplace(proc, ctx, &mut local_copy, &mut rctx_copy, Vec::new(), &mut constraints)?;
+        ProcX::type_check_inplace(proc, ctx, &mut local_copy, &mut rctx_copy, Vector::new(), &mut constraints)?;
         Ok(constraints)
     }
 }
