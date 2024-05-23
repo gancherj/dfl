@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 
 pub mod ast;
@@ -9,9 +8,21 @@ pub mod span;
 
 use crate::ast::*;
 
+use clap::{command, Parser};
 use lalrpop_util::{lalrpop_mod, ParseError};
 
 lalrpop_mod!(pub dfl);
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Source file
+    source: String,
+
+    /// Disable permission check, only print permission constraints
+    #[arg(long, default_value_t = false)]
+    no_perm_check: bool,
+}
 
 fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
     if offset > src.len() {
@@ -65,57 +76,54 @@ fn main() {
 
     // solver.close().unwrap();
 
-    let args: Vec<_> = env::args().collect();
-    if args.len() < 2 {
-        println!("missing file argument")
-    } else {
-        let path: &String = &args[1];
-        let src = fs::read_to_string(path).expect("failed to read input file");
-        let parsed = dfl::ProgramParser::new().parse(&src);
-        let mut solver = smt::Solver::new("z3", &["-in"]).expect("failed to create solver");
+    let args = Args::parse();
 
-        match parsed {
-            Ok(program) => {
-                let ctx = Ctx::from(&program).unwrap();
-                // println!("{:?}", ctx);
-                
-                match ctx.type_check(&mut solver) {
-                    Ok(()) => println!("type checked"),
-                    Err(err) => {
-                        let loc = match err.span {
-                            Some(span) => {
-                                let (line, col) = get_line_col_num(&src, span.start).unwrap();
-                                format!("{}:{}:{}", path, line, col)
-                            }
-                            None => format!("{}", path)
-                        };
-                        println!("typing error: {}: {}", loc, err.msg);
-                    },
+    let path = &args.source;
+    let src = fs::read_to_string(path).expect("failed to read input file");
+    let parsed = dfl::ProgramParser::new().parse(&src);
+    let mut solver = smt::Solver::new("z3", &["-in"]).expect("failed to create solver");
+
+    match parsed {
+        Ok(program) => {
+            let ctx = Ctx::from(&program).unwrap();
+            // println!("{:?}", ctx);
+            
+            match ctx.type_check(if args.no_perm_check { None } else { Some(&mut solver) } ) {
+                Ok(()) => println!("type checked"),
+                Err(err) => {
+                    let loc = match err.span {
+                        Some(span) => {
+                            let (line, col) = get_line_col_num(&src, span.start).unwrap();
+                            format!("{}:{}:{}", path, line, col)
+                        }
+                        None => format!("{}", path)
+                    };
+                    println!("typing error: {}: {}", loc, err.msg);
+                },
+            }
+        }
+        Err(e) => {
+            let msg = match e {
+                ParseError::InvalidToken { location } => {
+                    let (line, col) = get_line_col_num(&src, location).unwrap();
+                    format!("invalid token at {}:{}:{}", path, line, col)
                 }
-            }
-            Err(e) => {
-                let msg = match e {
-                    ParseError::InvalidToken { location } => {
-                        let (line, col) = get_line_col_num(&src, location).unwrap();
-                        format!("invalid token at {}:{}:{}", path, line, col)
-                    }
-                    ParseError::UnrecognizedEof { location, .. } => {
-                        let (line, col) = get_line_col_num(&src, location).unwrap();
-                        format!("unexpected eof at {}:{}:{}", path, line, col)
-                    }
-                    ParseError::UnrecognizedToken { token: (start, token, _), .. } => {
-                        let (line, col) = get_line_col_num(&src, start).unwrap();
-                        format!("unexpected token {} at {}:{}:{}", token, path, line, col)
-                    }
-                    ParseError::ExtraToken { token: (start, token, _) } => {
-                        let (line, col) = get_line_col_num(&src, start).unwrap();
-                        format!("extra token {} at {}:{}:{}", token, path, line, col)
-                    }
-                    ParseError::User { error } => error.to_string(),
-                };
+                ParseError::UnrecognizedEof { location, .. } => {
+                    let (line, col) = get_line_col_num(&src, location).unwrap();
+                    format!("unexpected eof at {}:{}:{}", path, line, col)
+                }
+                ParseError::UnrecognizedToken { token: (start, token, _), .. } => {
+                    let (line, col) = get_line_col_num(&src, start).unwrap();
+                    format!("unexpected token {} at {}:{}:{}", token, path, line, col)
+                }
+                ParseError::ExtraToken { token: (start, token, _) } => {
+                    let (line, col) = get_line_col_num(&src, start).unwrap();
+                    format!("extra token {} at {}:{}:{}", token, path, line, col)
+                }
+                ParseError::User { error } => error.to_string(),
+            };
 
-                println!("parsing error: {}", msg);
-            }
+            println!("parsing error: {}", msg);
         }
     }
 }

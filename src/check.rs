@@ -265,6 +265,12 @@ impl PermissionX {
             }
             // TODO: should we allow deref in permission?
             PermissionX::Fraction(_, mut_ref) => MutReferenceX::type_check(mut_ref, ctx, local).map(|_| ()),
+            PermissionX::Var(_, terms) => {
+                for t in terms {
+                    TermX::type_check(t, ctx, local)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -529,7 +535,7 @@ impl ProcX {
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(&self, solver: &mut smt::Solver) -> Result<(), Error> {
+    pub fn type_check(&self, mut solver_opt: Option<&mut smt::Solver>) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
         // Check mutable types are all non-reference types
@@ -597,51 +603,58 @@ impl Ctx {
                 }
             }
 
-            // TODO: better error handling
-            let mut smt_constraints = Vec::new();
-            let mut smt_ctx = EncodingCtx::new("perm");
             let constraints = ProcX::type_check(&decl.body, self, &local, &rctx)?;
 
-            solver.push().expect("failed to push");
+            // TODO: better error handling
+            if let Some(solver) = &mut solver_opt {
+                let mut smt_constraints = Vec::new();
+                let mut smt_ctx = EncodingCtx::new("perm");
 
-            println!("checking permissions for `{}`:", decl.name);
-            // Convert permission constraints to SMT constraints
-            for constraint in &constraints {
-                smt_constraints.push(
-                    constraint
-                        .encode_invalidity(&mut smt_ctx, self, 5)
-                        .unwrap(),
-                );
-            }
+                println!("checking permissions for `{}`:", decl.name);
+                // Convert permission constraints to SMT constraints
+                for constraint in &constraints {
+                    smt_constraints.push(
+                        constraint
+                            .encode_invalidity(&mut smt_ctx, self, 5)?,
+                    );
+                }
 
-            // Send context commands
-            for cmd in smt_ctx.to_commands() {
-                solver.send_command(cmd).expect("failed to send command");
-            }
+                solver.push().expect("failed to push");
 
-            // Send assertions and check for validity
-            for (smt_constraint, constraint) in smt_constraints.iter().zip(constraints.iter()) {
-                solver.assert(smt_constraint).expect("failed to assert");
+                // Send context commands
+                for cmd in smt_ctx.to_commands() {
+                    solver.send_command(cmd).expect("failed to send command");
+                }
 
-                match solver.check_sat().unwrap() {
-                    smt::SatResult::Sat => {
-                        let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
-                        println!("  not valid: {}", constraint);
-                        println!("  encoding: {}", smt_constraint);
-                        print!("  model: {}", result);
-                        return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
-                    }
-                    smt::SatResult::Unsat => {
-                        println!("  valid: {}", constraint);
-                    }
-                    smt::SatResult::Unknown => {
-                        println!("  unknown: {}", constraint);
-                        return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
+                // Send assertions and check for validity
+                for (smt_constraint, constraint) in smt_constraints.iter().zip(constraints.iter()) {
+                    solver.assert(smt_constraint).expect("failed to assert");
+
+                    match solver.check_sat().unwrap() {
+                        smt::SatResult::Sat => {
+                            let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
+                            println!("  not valid: {}", constraint);
+                            println!("  encoding: {}", smt_constraint);
+                            print!("  model: {}", result);
+                            return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
+                        }
+                        smt::SatResult::Unsat => {
+                            println!("  valid: {}", constraint);
+                        }
+                        smt::SatResult::Unknown => {
+                            println!("  unknown: {}", constraint);
+                            return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
+                        }
                     }
                 }
-            }
 
-            solver.pop().expect("failed to pop");
+                solver.pop().expect("failed to pop");
+            } else {
+                // No solver provided, we just print out permission constraints
+                for constraint in constraints {
+                    println!("  {}", constraint);
+                }
+            }
         }
 
         Ok(())

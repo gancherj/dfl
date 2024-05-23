@@ -40,6 +40,7 @@ Const: Const = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => <>.into() }
 MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
+PermVar: PermVar = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 
 BaseType: BaseType = {
     "bool" => BaseType::Bool,
@@ -76,6 +77,7 @@ MutReference: MutReference = {
 PermissionReset = <Permission>;
 Permission: Permission = {
     #[precedence(level = "0")]
+    <start:@L> <v:PermVar> "(" <ts:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(start, end, PermissionX::Var(v, ts)),
     <start:@L> "empty" <end:@R> => Spanned::spanned(start, end, PermissionX::Empty),
     <start:@L> <f:PermFraction> <r:MutReference> <end:@R> => Spanned::spanned(start, end, PermissionX::Fraction(f, r)),
     <start:@L> "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" <end:@R> => Spanned::spanned(start, end, PermissionX::Ite(t, p1, p2)),
