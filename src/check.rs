@@ -542,7 +542,7 @@ impl Ctx {
                         if !self.chans.contains_key(name) {
                             return Error::spanned_err(res.span, format!("channel `{}` does not exist", name));
                         }
-                        
+
                         if !rctx.outs.insert(name.clone()) {
                             return Error::spanned_err(res.span, format!("duplicate `output {}`", name));
                         }
@@ -578,14 +578,14 @@ impl Ctx {
                         println!("  not valid: {} |= {}", local, constraint);
                         println!("  encoding: {}", smt_constraint);
                         print!("  model: {}", result);
-                        break;
+                        return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
                     }
                     smt::SatResult::Unsat => {
                         println!("  valid: {} |= {}", local, constraint);
                     }
                     smt::SatResult::Unknown => {
                         println!("  unknown: {} |= {}", local, constraint);
-                        break;
+                        return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
                     }
                 }
             }

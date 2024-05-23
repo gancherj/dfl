@@ -282,7 +282,7 @@ impl Ctx {
                     // Substitute the process body
                     let new_body = ProcX::substitute(&decl.body, &mut new_subst);
 
-                    ctx.procs.insert(decl.name.clone(), Spanned::new(ProcDeclX {
+                    ctx.procs.insert(decl.name.clone(), Spanned::spanned_option(decl.span, ProcDeclX {
                         name: decl.name.clone(),
                         params: decl.params.iter().map(|p| p.clone()).collect(),
                         res: new_res,

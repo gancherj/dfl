@@ -23,6 +23,10 @@ impl<X> Spanned<X> {
     pub fn spanned(start: usize, end: usize, x: X) -> RcSpanned<X> {
         Rc::new(Spanned { span: Some(Span { start, end }), x })
     }
+
+    pub fn spanned_option(span: Option<Span>, x: X) -> RcSpanned<X> {
+        Rc::new(Spanned { span, x })
+    }
 }
 
 impl<X> Deref for Spanned<X> {
