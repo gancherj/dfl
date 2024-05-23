@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::{ast::*, check::LocalCtx, smt::{self, EncodingCtx}};
+use crate::{ast::*, check::LocalCtx, smt::{self, EncodingCtx}, span::Spanned};
 
 pub type PermConstraint = Rc<PermConstraintX>;
 #[derive(Debug)]
@@ -141,7 +141,7 @@ impl PermissionX {
                 // Extract the slices and put them in a vector
                 // index_ranges = [ s_m, ..., s_2, s_1 ]
                 loop {
-                    match rem_mut_ref.as_ref() {
+                    match &rem_mut_ref.x {
                         MutReferenceX::Base(base) => {
                             // If this reference is talking about some other
                             // mutable, the permission is always false
@@ -162,7 +162,7 @@ impl PermissionX {
 
                 // Want to check that each idx is within the range specified by the outermost slice of mut_ref
                 for (idx, mut_ref) in indices.iter().zip(index_ranges.iter().rev()) {
-                    match mut_ref.as_ref() {
+                    match &mut_ref.x {
                         MutReferenceX::Base(..) => unreachable!(),
                         MutReferenceX::Deref(..) => unreachable!(),
                         MutReferenceX::Index(_, t) => {
@@ -270,7 +270,7 @@ impl PermConstraintX {
 
                 for k in 0..num_fractions {
                     conditions.push(Rc::new(PermConstraintX::LessEq(
-                        Rc::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
+                        Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
                         p.clone(),
                     )).encode_invalidity(smt_ctx, ctx, local, num_fractions)?);
                 }
@@ -297,7 +297,7 @@ impl PermConstraintX {
             }
             PermConstraintX::HasWrite(mut_ref, p) =>
                 Rc::new(PermConstraintX::LessEq(
-                    Rc::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
+                    Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
                     p.clone(),
                 )).encode_invalidity(smt_ctx, ctx, local, num_fractions),
         }
