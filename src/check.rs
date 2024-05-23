@@ -276,7 +276,8 @@ impl ProcX {
         ctx: &Ctx,
         local: &mut LocalCtx,
         rctx: &mut ResourceCtx,
-        constraints: &mut Vec<(PermConstraint, LocalCtx)>,
+        mut path_conditions: Vec<Term>,
+        constraints: &mut Vec<PermJudgment>,
     ) -> Result<(), Error> {
         match &proc.x {
             ProcX::Skip => Ok(()),
@@ -302,11 +303,15 @@ impl ProcX {
                     &Var::from(&chan_decl.name),
                     t,
                 );
-                constraints.push((PermConstraintX::less_eq(&send_perm, &rctx.perm), local.clone()));
+                constraints.push(PermJudgment {
+                    local: local.clone(),
+                    local_constraints: path_conditions.clone(),
+                    perm_constraint: PermConstraintX::less_eq(&send_perm, &rctx.perm),
+                });
                 rctx.perm = PermissionX::sub(&rctx.perm, &send_perm);
 
                 // Check rest of the process
-                ProcX::type_check_inplace(k, ctx, local, rctx, constraints)
+                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
             ProcX::Recv(c, v, k) => {
                 let chan_decl = ctx
@@ -328,10 +333,16 @@ impl ProcX {
                 rctx.perm = PermissionX::add(&rctx.perm, &recv_perm);
 
                 // Receive a new variable
+                if local.vars.contains_key(v) {
+                    return Error::spanned_err(proc.span, format!("shadowing of local variable `{}` not supported", v));
+                }
+                if ctx.consts.contains_key(&Const::from(v)) {
+                    return Error::spanned_err(proc.span, format!("shadowing of constant `{}` not supported", v));
+                }
                 local.vars.insert(v.clone(), chan_decl.typ.clone());
 
                 // Check rest of the process
-                ProcX::type_check_inplace(k, ctx, local, rctx, constraints)
+                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
             ProcX::Write(m, t, k) => {
                 // Check t matches the type of the reference
@@ -350,19 +361,27 @@ impl ProcX {
                 // (for all possibly referenced mutables)
                 // TODO: simplify m
                 if m.is_simple() {
-                    constraints.push((PermConstraintX::has_write(m, &rctx.perm), local.clone()));
+                    constraints.push(PermJudgment {
+                        local: local.clone(),
+                        local_constraints: path_conditions.clone(),
+                        perm_constraint: PermConstraintX::has_write(m, &rctx.perm),
+                    });
                 } else {
                     for m_name in &m_names {
-                        constraints.push((PermConstraintX::has_write(
-                            &Spanned::new(MutReferenceX::Base(m_name.clone())),
-                            // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
-                            &rctx.perm,
-                        ), local.clone()));
+                        constraints.push(PermJudgment {
+                            local: local.clone(),
+                            local_constraints: path_conditions.clone(),
+                            perm_constraint: PermConstraintX::has_write(
+                                &Spanned::new(MutReferenceX::Base(m_name.clone())),
+                                // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
+                                &rctx.perm,
+                            ),
+                        });
                     }
                 }
 
                 // Check rest of the process
-                ProcX::type_check_inplace(k, ctx, local, rctx, constraints)
+                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
             ProcX::Read(m, v, k) => {
                 // Get the return type of the read
@@ -372,28 +391,42 @@ impl ProcX {
                 // (for all possibly referenced mutables)
                 // TODO: simplify m
                 if m.is_simple() {
-                    constraints.push((PermConstraintX::has_read(m, &rctx.perm), local.clone()));
+                    constraints.push(PermJudgment {
+                        local: local.clone(),
+                        local_constraints: path_conditions.clone(),
+                        perm_constraint: PermConstraintX::has_read(m, &rctx.perm),
+                    });
                 } else {
                     // Overapproximate and require the permission of the entire mutable
                     for m_name in &m_names {
-                        constraints.push((PermConstraintX::has_read(
-                            &Spanned::new(MutReferenceX::Base(m_name.clone())),
-                            // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
-                            &rctx.perm,
-                        ), local.clone()));
+                        constraints.push(PermJudgment {
+                            local: local.clone(),
+                            local_constraints: path_conditions.clone(),
+                            perm_constraint: PermConstraintX::has_read(
+                                &Spanned::new(MutReferenceX::Base(m_name.clone())),
+                                // &MutReferenceX::substitute_deref_with_mut_name(m, m_name),
+                                &rctx.perm,
+                            ),
+                        });
                     }
                 }
 
                 // Update local context with new binding
                 if let MutTypeX::Base(m_base) = m_typ.as_ref() {
                     // Add read variable into context
+                    if local.vars.contains_key(v) {
+                        return Error::spanned_err(proc.span, format!("shadowing of local variable `{}` not supported", v));
+                    }
+                    if ctx.consts.contains_key(&Const::from(v)) {
+                        return Error::spanned_err(proc.span, format!("shadowing of constant `{}` not supported", v));
+                    }
                     local.vars.insert(v.clone(), m_base.clone());
                 } else {
                     return Error::spanned_err(proc.span, format!("cannot read from a non-base-typed mutable reference"));
                 }
 
                 // Check rest of the process
-                ProcX::type_check_inplace(k, ctx, local, rctx, constraints)
+                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
             ProcX::Ite(t, k1, k2) => {
                 if TermX::type_check(t, ctx, local)? != BaseType::Bool {
@@ -403,13 +436,22 @@ impl ProcX {
                 let mut local_copy = local.clone();
                 let mut res_copy = rctx.clone();
 
-                ProcX::type_check_inplace(k1, ctx, local, rctx, constraints)
-                    .and(ProcX::type_check_inplace(k2, ctx, &mut local_copy, &mut res_copy, constraints))
+                let mut path_conditions_copy: Vec<std::rc::Rc<Spanned<TermX>>> = path_conditions.clone();
+
+                // Push respective path conditions
+                path_conditions.push(t.clone());
+                path_conditions_copy.push(TermX::not(t));
+
+                ProcX::type_check_inplace(k1, ctx, local, rctx, path_conditions, constraints)
+                    .and(ProcX::type_check_inplace(k2, ctx, &mut local_copy, &mut res_copy, path_conditions_copy, constraints))
             }
 
             // P <args> has the same typing rules as P <args> || skip
             ProcX::Call(..) =>
-                ProcX::type_check_inplace(&ProcX::par(proc, &ProcX::skip()), ctx, local, rctx, constraints),
+                ProcX::type_check_inplace(
+                    &ProcX::par(proc, &ProcX::skip()),
+                    ctx, local, rctx, path_conditions, constraints,
+                ),
 
             // TODO: currently, we only allow process calls to
             // be the LHS of a parallel composition.
@@ -440,7 +482,11 @@ impl ProcX {
                             ProcResourceX::Perm(p) => {
                                 // Should have enough resource to call the process
                                 let p_subst = PermissionX::substitute(p, &subst);
-                                constraints.push((PermConstraintX::less_eq(&p_subst, &rctx.perm), local.clone()));
+                                constraints.push(PermJudgment {
+                                    local: local.clone(),
+                                    local_constraints: path_conditions.clone(),
+                                    perm_constraint: PermConstraintX::less_eq(&p_subst, &rctx.perm),
+                                });
                                 rctx.perm = PermissionX::sub(&rctx.perm, &p_subst);
                             },
 
@@ -458,7 +504,7 @@ impl ProcX {
                     }
 
                     // Continue checking the rest of the parallel composition
-                    ProcX::type_check_inplace(k2, ctx, local, rctx, constraints)
+                    ProcX::type_check_inplace(k2, ctx, local, rctx, path_conditions, constraints)
                 } else {
                     Error::spanned_err(proc.span, format!("currently only process calls are allowed to be the LHS of ||"))
                 }
@@ -466,16 +512,16 @@ impl ProcX {
             ProcX::Debug(k) => {
                 println!("local context: {:?}", local);
                 println!("resouce context: {:?}", rctx);
-                ProcX::type_check_inplace(k, ctx, local, rctx, constraints)
+                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
         }
     }
 
-    pub fn type_check(proc: &Proc, ctx: &Ctx, local: &LocalCtx, rctx: &ResourceCtx) -> Result<Vec<(PermConstraint, LocalCtx)>, Error> {
+    pub fn type_check(proc: &Proc, ctx: &Ctx, local: &LocalCtx, rctx: &ResourceCtx) -> Result<Vec<PermJudgment>, Error> {
         let mut local_copy = local.clone();
         let mut rctx_copy = rctx.clone();
         let mut constraints = Vec::new();
-        ProcX::type_check_inplace(proc, ctx, &mut local_copy, &mut rctx_copy, &mut constraints)?;
+        ProcX::type_check_inplace(proc, ctx, &mut local_copy, &mut rctx_copy, Vec::new(), &mut constraints)?;
         Ok(constraints)
     }
 }
@@ -559,8 +605,12 @@ impl Ctx {
 
             println!("checking permissions for `{}`:", decl.name);
             // Convert permission constraints to SMT constraints
-            for (constraint, local) in &constraints {
-                smt_constraints.push(constraint.encode_invalidity(&mut smt_ctx, self, local, 5).unwrap());
+            for constraint in &constraints {
+                smt_constraints.push(
+                    constraint
+                        .encode_invalidity(&mut smt_ctx, self, 5)
+                        .unwrap(),
+                );
             }
 
             // Send context commands
@@ -569,22 +619,22 @@ impl Ctx {
             }
 
             // Send assertions and check for validity
-            for (smt_constraint, (constraint, local)) in smt_constraints.iter().zip(constraints.iter()) {
+            for (smt_constraint, constraint) in smt_constraints.iter().zip(constraints.iter()) {
                 solver.assert(smt_constraint).expect("failed to assert");
 
                 match solver.check_sat().unwrap() {
                     smt::SatResult::Sat => {
                         let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
-                        println!("  not valid: {} |= {}", local, constraint);
+                        println!("  not valid: {}", constraint);
                         println!("  encoding: {}", smt_constraint);
                         print!("  model: {}", result);
                         return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
                     }
                     smt::SatResult::Unsat => {
-                        println!("  valid: {} |= {}", local, constraint);
+                        println!("  valid: {}", constraint);
                     }
                     smt::SatResult::Unknown => {
-                        println!("  unknown: {} |= {}", local, constraint);
+                        println!("  unknown: {}", constraint);
                         return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
                     }
                 }

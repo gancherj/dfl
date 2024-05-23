@@ -164,6 +164,12 @@ impl From<&Const> for Var {
     }
 }
 
+impl From<&Var> for Const {
+    fn from(value: &Var) -> Const {
+        Const(value.0.clone())
+    }
+}
+
 impl From<&ChanName> for Var {
     fn from(value: &ChanName) -> Var {
         Var(value.0.clone())
@@ -304,6 +310,10 @@ impl TermX {
 
     pub fn constant(c: &Const) -> Term {
         Spanned::new(TermX::Const(c.clone()))
+    }
+
+    pub fn not(t: &Term) -> Term {
+        Spanned::new(TermX::Not(t.clone()))
     }
 
     /// Returns Some if the term is substituted, None if unchanged

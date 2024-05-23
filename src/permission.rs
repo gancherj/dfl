@@ -23,6 +23,23 @@ pub enum PermConstraintX {
     HasWrite(MutReference, Permission),
 }
 
+#[derive(Debug)]
+pub struct PermJudgment {
+    pub local: LocalCtx,
+    pub local_constraints: Vec<Term>,
+    pub perm_constraint: PermConstraint,
+}
+
+impl fmt::Display for PermJudgment {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.local)?;
+        for local_constraint in &self.local_constraints {
+            write!(f, ", {}", local_constraint)?;
+        }
+        write!(f, " |= {}", self.perm_constraint)
+    }
+}
+
 impl BaseType {
     pub fn as_smt_sort(&self) -> Option<smt::Sort> {
         match self {
@@ -188,6 +205,40 @@ impl PermissionX {
     }
 }
 
+impl PermJudgment {
+    /// Encode the invalidity of the permission judgment as an SMT term
+    pub fn encode_invalidity(&self, smt_ctx: &mut EncodingCtx, ctx: &Ctx, num_fractions: u64) -> Result<smt::Term, String> {
+        // Set up constant and variable interpretations
+        let mut const_interp = IndexMap::new();
+        let mut var_interp = IndexMap::new();
+
+        for c in ctx.consts.values() {
+            if let Some(sort) = c.typ.as_smt_sort() {
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("const_{}", &c.name.0), sort));
+                const_interp.insert(c.name.clone(), fresh_var);
+            } // ignore unsupported sort
+        }
+
+        for (v, t) in &self.local.vars {
+            if let Some(sort) = t.as_smt_sort() {
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("var_{}", &v.0), sort));
+                var_interp.insert(v.clone(), fresh_var);
+            } // ignore unsupported sort
+        }
+
+        Ok(smt::TermX::and([
+            // Add local constraints
+            smt::TermX::and(self.local_constraints.iter()
+                .map(|c| c.as_smt_term(&const_interp, &var_interp))
+                .collect::<Result<Vec<_>, _>>()?
+            ),
+            
+            // Negation of the permission constraint
+            self.perm_constraint.encode_invalidity(smt_ctx, ctx, &const_interp, &var_interp, num_fractions)?
+        ]))
+    }
+}
+
 impl PermConstraintX {
     pub fn less_eq(p1: &Permission, p2: &Permission) -> PermConstraint {
         Rc::new(PermConstraintX::LessEq(p1.clone(), p2.clone()))
@@ -204,7 +255,15 @@ impl PermConstraintX {
     /// Encode the invalidity of the permission constraint to SMT
     /// i.e. if the SMT constraint is unsat, the permission constraint
     /// is valid.
-    pub fn encode_invalidity(&self, smt_ctx: &mut EncodingCtx, ctx: &Ctx, local: &LocalCtx, num_fractions: u64) -> Result<smt::Term, String> {
+    pub fn encode_invalidity(
+        &self,
+        smt_ctx: &mut EncodingCtx,
+        ctx: &Ctx,
+
+        const_interp: &IndexMap<Const, smt::Term>,
+        var_interp: &IndexMap<Var, smt::Term>,
+        num_fractions: u64,
+    ) -> Result<smt::Term, String> {
         // For all mutable m, and for any indices i_1, ..., i_n of m
         // for any 0 <= j < num_fractions
         // Interpret each permission as a bool
@@ -225,24 +284,11 @@ impl PermConstraintX {
                 let indices: Vec<_> = (0..max_dim)
                     .map(|_| smt::TermX::var(smt_ctx.fresh_var("arr_idx", smt::Sort::Int)))
                     .collect();
-
-                // Build constant and variable interpretations
-                let mut const_interp = IndexMap::new();
-                let mut var_interp = IndexMap::new();
-
-                for c in ctx.consts.values() {
-                    if let Some(sort) = c.typ.as_smt_sort() {
-                        let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("const_{}", &c.name.0), sort));
-                        const_interp.insert(c.name.clone(), fresh_var);
-                    } // ignore unsupported sort
-                }
-
-                for (v, t) in &local.vars {
-                    if let Some(sort) = t.as_smt_sort() {
-                        let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("var_{}", &v.0), sort));
-                        var_interp.insert(v.clone(), fresh_var);
-                    } // ignore unsupported sort
-                }
+                
+                // Bound arr_idx >= 0 (and maybe < length of the mutable too?)
+                let indices_constraint: Vec<_> = indices.iter()
+                    .map(|i| smt::TermX::lte(smt::TermX::int(0), i))
+                    .collect();
 
                 // Does there exists a mutable, a fraction index, and indices such that
                 // the permission is set at this location for p1 but not for p2
@@ -254,6 +300,8 @@ impl PermConstraintX {
                     // 0 <= frac_idx < num_fractions
                     smt::TermX::lte(smt::TermX::int(0), frac_idx),
                     smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
+
+                    smt::TermX::and(indices_constraint),
 
                     smt::TermX::not(
                         smt::TermX::implies(
@@ -272,7 +320,7 @@ impl PermConstraintX {
                     conditions.push(Rc::new(PermConstraintX::LessEq(
                         Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
                         p.clone(),
-                    )).encode_invalidity(smt_ctx, ctx, local, num_fractions)?);
+                    )).encode_invalidity(smt_ctx, ctx, const_interp, var_interp, num_fractions)?);
                 }
 
                 Ok(smt::TermX::and(conditions))
@@ -299,7 +347,7 @@ impl PermConstraintX {
                 Rc::new(PermConstraintX::LessEq(
                     Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
                     p.clone(),
-                )).encode_invalidity(smt_ctx, ctx, local, num_fractions),
+                )).encode_invalidity(smt_ctx, ctx, const_interp, var_interp, num_fractions),
         }
     }
 }

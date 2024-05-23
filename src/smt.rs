@@ -209,11 +209,21 @@ impl TermX {
     }
 
     pub fn and(conj: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
-        TermX::app("and", conj)
+        let args: Vec<_> = conj.into_iter().collect();
+        if args.len() != 0 {
+            TermX::app("and", args)
+        } else {
+            TermX::bool(true)
+        }
     }
 
     pub fn or(conj: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
-        TermX::app("or", conj)
+        let args: Vec<_> = conj.into_iter().collect();
+        if args.len() != 0 {
+            TermX::app("or", args)
+        } else {
+            TermX::bool(false)
+        }
     }
 
     pub fn not(a: impl Borrow<Term>) -> Term {
