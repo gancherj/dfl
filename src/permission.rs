@@ -215,14 +215,14 @@ impl PermJudgment {
 
         for c in ctx.consts.values() {
             if let Some(sort) = c.typ.as_smt_sort() {
-                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("const_{}", &c.name.0), sort));
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("const_{}", c.name.as_str()), sort));
                 const_interp.insert(c.name.clone(), fresh_var);
             } // ignore unsupported sort
         }
 
         for (v, t) in &self.local.vars {
             if let Some(sort) = t.as_smt_sort() {
-                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("var_{}", &v.0), sort));
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("var_{}", v.as_str()), sort));
                 var_interp.insert(v.clone(), fresh_var);
             } // ignore unsupported sort
         }

@@ -35,11 +35,11 @@ Int: i64 = {
     UnsignedInt => <>.into(),
     "-?[1-9][0-9]*" => i64::from_str(<>).unwrap(),
 }
-Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Var(<>.into()) }
-Const: Const = { r"[a-zA-Z_][a-zA-Z0-9_']*" => Const(<>.into()) }
-ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => ChanName(<>.into()) }
-ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => ProcName(<>.into()) }
-MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => MutName(<>.into()) }
+Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
+Const: Const = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
+ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
+ProcName: ProcName = { r"[a-zA-Z_][a-zA-Z0-9_']*"  => <>.into() }
+MutName: MutName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 
 BaseType: BaseType = {
     "bool" => BaseType::Bool,

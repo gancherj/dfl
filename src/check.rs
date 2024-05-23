@@ -301,7 +301,7 @@ impl ProcX {
                 // Need to spend the permission required by the channel
                 let send_perm = PermissionX::substitute_one(
                     &chan_decl.perm,
-                    &Var::from(&chan_decl.name),
+                    &chan_decl.name,
                     t,
                 );
                 constraints.push(PermJudgment {
@@ -328,8 +328,8 @@ impl ProcX {
                 // Receive the permission contained in the channel
                 let recv_perm = PermissionX::substitute_one(
                     &chan_decl.perm,
-                    &Var::from(&chan_decl.name),
-                    &TermX::var(&v),
+                    &chan_decl.name,
+                    &TermX::var(v),
                 );
                 rctx.perm = PermissionX::add(&rctx.perm, &recv_perm);
 
@@ -574,7 +574,7 @@ impl Ctx {
                 match &res.x {
                     ProcResourceX::Perm(perm) => {
                         PermissionX::type_check(perm, self, &local)?;
-                        rctx.perm = PermissionX::add(&rctx.perm, &perm);
+                        rctx.perm = PermissionX::add(rctx.perm, perm);
                     },
                     ProcResourceX::Input(name) => {
                         if !self.chans.contains_key(name) {

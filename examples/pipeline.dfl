@@ -21,6 +21,6 @@ proc St | in st_value, in st_index =
     recv i <- st_index
     write x -> A[i]
     St
-     
+
 proc Program | all =
     Inc 0 || Ld || St

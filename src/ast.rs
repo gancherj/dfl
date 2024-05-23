@@ -1,24 +1,49 @@
-use std::fmt;
+use std::{borrow::Borrow, fmt};
 use std::rc::Rc;
 
 use indexmap::{IndexMap, IndexSet};
 
 use crate::span::*;
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct MutName(pub Rc<str>);
+/// Macro for defining string types like
+/// pub struct $NAME(Rc<str>);
+macro_rules! rc_str_type {
+    ($typ_name:ident, $fmt_pattern:expr) => {
+        #[derive(Hash, Eq, PartialEq, Clone, Debug)]
+        pub struct $typ_name(Rc<str>);
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct ChanName(pub Rc<str>);
+        impl From<&$typ_name> for Rc<str> {
+            fn from(v: &$typ_name) -> Self {
+                v.0.clone()
+            }
+        }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct ProcName(pub Rc<str>);
+        impl<S: Into<Rc<str>>> From<S> for $typ_name {
+            fn from(v: S) -> Self {
+                $typ_name(v.into())
+            }
+        }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Var(pub Rc<str>);
+        impl fmt::Display for $typ_name {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, $fmt_pattern, self.0)
+            }
+        }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct Const(pub Rc<str>);
+        impl $typ_name {
+            pub fn as_str(&self) -> &str {
+                self.0.as_ref()
+            }
+        }
+    };
+}
+
+rc_str_type!(MutName, "mut({})");
+rc_str_type!(ChanName, "chan({})");
+rc_str_type!(ProcName, "proc({})");
+rc_str_type!(Var, "var({})");
+rc_str_type!(Const, "const({})");
+rc_str_type!(PermVar, "perm({})");
 
 #[derive(Clone, Copy, Debug)]
 pub enum PermFraction {
@@ -43,6 +68,7 @@ pub enum PermissionX {
     Sub(Permission, Permission),
     Ite(Term, Permission, Permission),
     Fraction(PermFraction, MutReference),
+    // Var(PermVar, Vec<Term>),
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -156,30 +182,6 @@ pub struct Ctx {
     pub muts: IndexMap<MutName, MutDecl>,
     pub chans: IndexMap<ChanName, ChanDecl>,
     pub procs: IndexMap<ProcName, ProcDecl>,
-}
-
-impl From<&Const> for Var {
-    fn from(value: &Const) -> Var {
-        Var(value.0.clone())
-    }
-}
-
-impl From<&Var> for Const {
-    fn from(value: &Var) -> Const {
-        Const(value.0.clone())
-    }
-}
-
-impl From<&ChanName> for Var {
-    fn from(value: &ChanName) -> Var {
-        Var(value.0.clone())
-    }
-}
-
-impl From<&str> for Var {
-    fn from(value: &str) -> Var {
-        Var(value.into())
-    }
 }
 
 impl Ctx {
@@ -304,21 +306,21 @@ impl Ctx {
 }
 
 impl TermX {
-    pub fn var(v: &Var) -> Term {
-        Spanned::new(TermX::Var(v.clone()))
+    pub fn var(v: impl Into<Var>) -> Term {
+        Spanned::new(TermX::Var(v.into()))
     }
 
-    pub fn constant(c: &Const) -> Term {
-        Spanned::new(TermX::Const(c.clone()))
+    pub fn constant(c: impl Into<Const>) -> Term {
+        Spanned::new(TermX::Const(c.into()))
     }
 
-    pub fn not(t: &Term) -> Term {
-        Spanned::new(TermX::Not(t.clone()))
+    pub fn not(t: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::Not(t.borrow().clone()))
     }
 
     /// Returns Some if the term is substituted, None if unchanged
-    fn substitute_inplace(term: &Term, subst: &IndexMap<Var, Term>) -> Option<Term> {
-        match &term.x {
+    fn substitute_inplace(term: impl Borrow<Term>, subst: &IndexMap<Var, Term>) -> Option<Term> {
+        match &term.borrow().x {
             TermX::Var(var) => Some(subst.get(var)?.clone()),
             TermX::Const(..) => None,
             TermX::Bool(..) => None,
@@ -402,8 +404,8 @@ impl TermX {
     }
 
     /// Substitutes into a term without modifying unchanged subtrees
-    pub fn substitute(term: &Term, subst: &IndexMap<Var, Term>) -> Term {
-        Self::substitute_inplace(term, subst).unwrap_or(term.clone())
+    pub fn substitute(term: impl Borrow<Term>, subst: &IndexMap<Var, Term>) -> Term {
+        Self::substitute_inplace(term.borrow(), subst).unwrap_or(term.borrow().clone())
     }
 
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
@@ -531,8 +533,8 @@ impl MutReferenceX {
     }
 
     /// Returns None if unchanged
-    fn substitute_inplace(mut_ref: &MutReference, subst: &IndexMap<Var, Term>) -> Option<MutReference> {
-        match &mut_ref.x {
+    fn substitute_inplace(mut_ref: impl Borrow<MutReference>, subst: &IndexMap<Var, Term>) -> Option<MutReference> {
+        match &mut_ref.borrow().x {
             MutReferenceX::Base(..) => None,
             MutReferenceX::Deref(t) => {
                 let t_subst = TermX::substitute_inplace(t, subst);
@@ -556,8 +558,8 @@ impl MutReferenceX {
             }
             MutReferenceX::Slice(m, t1, t2) => {
                 let m_subst = Self::substitute_inplace(m, subst);
-                let t1_subst = t1.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
-                let t2_subst = t2.as_ref().map(|t| TermX::substitute_inplace(&t, subst)).flatten();
+                let t1_subst = t1.as_ref().map(|t| TermX::substitute_inplace(t, subst)).flatten();
+                let t2_subst = t2.as_ref().map(|t| TermX::substitute_inplace(t, subst)).flatten();
                 if m_subst.is_some() || t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::new(MutReferenceX::Slice(
                         m_subst.unwrap_or(m.clone()),
@@ -572,9 +574,9 @@ impl MutReferenceX {
     }
 
     // Substitute the highest level deref with a fixed reference to a mutable
-    pub fn substitute_deref_with_mut_name(mut_ref: &MutReference, name: &MutName) -> MutReference {
-        match &mut_ref.x {
-            MutReferenceX::Base(..) => mut_ref.clone(),
+    pub fn substitute_deref_with_mut_name(mut_ref: impl Borrow<MutReference>, name: &MutName) -> MutReference {
+        match &mut_ref.borrow().x {
+            MutReferenceX::Base(..) => mut_ref.borrow().clone(),
             MutReferenceX::Deref(..) => Spanned::new(MutReferenceX::Base(name.clone())),
             MutReferenceX::Index(m, t) =>
                 Spanned::new(MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
@@ -587,8 +589,8 @@ impl MutReferenceX {
 impl ProcX {
     /// Returns None if unchanged
     // TODO: this functinon currently assumes no capturing of variables
-    fn substitute_inplace(proc: &Proc, subst: &mut IndexMap<Var, Term>) -> Option<Proc> {
-        match &proc.x {
+    fn substitute_inplace(proc: impl Borrow<Proc>, subst: &mut IndexMap<Var, Term>) -> Option<Proc> {
+        match &proc.borrow().x {
             ProcX::Skip => None,
             ProcX::Send(c, t, p) => {
                 let t_subst = TermX::substitute_inplace(t, subst);
@@ -714,8 +716,8 @@ impl ProcX {
     }
 
     /// Substitutes into a permission without modifying unchanged subtrees
-    pub fn substitute(p: &Proc, subst: &mut IndexMap<Var, Term>) -> Proc {
-        Self::substitute_inplace(p, subst).unwrap_or(p.clone())
+    pub fn substitute(p: impl Borrow<Proc>, subst: &mut IndexMap<Var, Term>) -> Proc {
+        Self::substitute_inplace(p.borrow(), subst).unwrap_or(p.borrow().clone())
     }
 }
 
@@ -731,27 +733,27 @@ impl PermissionX {
         Spanned::new(PermissionX::Empty)
     }
 
-    pub fn add(p1: &Permission, p2: &Permission) -> Permission {
-        if p1.is_empty() {
-            p2.clone()
-        } else if p2.is_empty() {
-            p1.clone()
+    pub fn add(p1: impl Borrow<Permission>, p2: impl Borrow<Permission>) -> Permission {
+        if p1.borrow().is_empty() {
+            p2.borrow().clone()
+        } else if p2.borrow().is_empty() {
+            p1.borrow().clone()
         } else {
-            Spanned::new(PermissionX::Add(p1.clone(), p2.clone()))
+            Spanned::new(PermissionX::Add(p1.borrow().clone(), p2.borrow().clone()))
         }
     }
 
-    pub fn sub(p1: &Permission, p2: &Permission) -> Permission {
-        if p2.is_empty() {
-            p1.clone()
+    pub fn sub(p1: impl Borrow<Permission>, p2: impl Borrow<Permission>) -> Permission {
+        if p2.borrow().is_empty() {
+            p1.borrow().clone()
         } else {
-            Spanned::new(PermissionX::Sub(p1.clone(), p2.clone()))
+            Spanned::new(PermissionX::Sub(p1.borrow().clone(), p2.borrow().clone()))
         }
     }
 
     /// Returns Some if the term is substituted, None if unchanged
-    fn substitute_inplace(perm: &Permission, subst: &IndexMap<Var, Term>) -> Option<Permission> {
-        match &perm.x {
+    fn substitute_inplace(perm: impl Borrow<Permission>, subst: &IndexMap<Var, Term>) -> Option<Permission> {
+        match &perm.borrow().x {
             PermissionX::Empty => None,
             PermissionX::Add(p1, p2) => {
                 let p1_subst = Self::substitute_inplace(p1, subst);
@@ -806,12 +808,12 @@ impl PermissionX {
     }
 
     /// Substitutes into a permission without modifying unchanged subtrees
-    pub fn substitute(perm: &Permission, subst: &IndexMap<Var, Term>) -> Permission {
-        Self::substitute_inplace(perm, subst).unwrap_or(perm.clone())
+    pub fn substitute(perm: impl Borrow<Permission>, subst: &IndexMap<Var, Term>) -> Permission {
+        Self::substitute_inplace(perm.borrow(), subst).unwrap_or(perm.borrow().clone())
     }
 
-    pub fn substitute_one(perm: &Permission, var: &Var, subterm: &Term) -> Permission {
-        PermissionX::substitute(perm, &IndexMap::from([ (var.clone(), subterm.clone()) ]))
+    pub fn substitute_one(perm: impl Borrow<Permission>, var: impl Into<Var>, subterm: impl Borrow<Term>) -> Permission {
+        PermissionX::substitute(perm, &IndexMap::from([ (var.into(), subterm.borrow().clone()) ]))
     }
 
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
@@ -848,62 +850,32 @@ impl ProcX {
         Spanned::new(ProcX::Skip)
     }
 
-    pub fn send(c: &ChanName, t: &Term, p: &Proc) -> Proc {
-        Spanned::new(ProcX::Send(c.clone(), t.clone(), p.clone()))
+    pub fn send(c: impl Into<ChanName>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Send(c.into(), t.borrow().clone(), p.borrow().clone()))
     }
 
-    pub fn recv(c: &ChanName, v: &Var, p: &Proc) -> Proc {
-        Spanned::new(ProcX::Recv(c.clone(), v.clone(), p.clone()))
+    pub fn recv(c: impl Into<ChanName>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Recv(c.into(), v.into(), p.borrow().clone()))
     }
 
-    pub fn write(m: &MutReference, t: &Term, p: &Proc) -> Proc {
-        Spanned::new(ProcX::Write(m.clone(), t.clone(), p.clone()))
+    pub fn write(m: impl Borrow<MutReference>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Write(m.borrow().clone(), t.borrow().clone(), p.borrow().clone()))
     }
 
-    pub fn read(m: &MutReference, v: &Var, p: &Proc) -> Proc {
-        Spanned::new(ProcX::Read(m.clone(), v.clone(), p.clone()))
+    pub fn read(m: impl Borrow<MutReference>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Read(m.borrow().clone(), v.into(), p.borrow().clone()))
     }
 
-    pub fn ite(t: &Term, p1: &Proc, p2: &Proc) -> Proc {
-        Spanned::new(ProcX::Ite(t.clone(), p1.clone(), p2.clone()))
+    pub fn ite(t: impl Borrow<Term>, p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Ite(t.borrow().clone(), p1.borrow().clone(), p2.borrow().clone()))
     }
 
-    pub fn par(p1: &Proc, p2: &Proc) -> Proc {
-        Spanned::new(ProcX::Par(p1.clone(), p2.clone()))
+    pub fn par(p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Par(p1.borrow().clone(), p2.borrow().clone()))
     }
 
-    pub fn call(name: &ProcName, args: &[Term]) -> Proc {
-        Spanned::new(ProcX::Call(name.clone(), Vec::from(args)))
-    }
-}
-
-impl fmt::Display for Var {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for Const {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "const({})", self.0)
-    }
-}
-
-impl fmt::Display for MutName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for ChanName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for ProcName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+    pub fn call(name: impl Into<ProcName>, args: impl IntoIterator<Item=impl Borrow<Term>>) -> Proc {
+        Spanned::new(ProcX::Call(name.into(), args.into_iter().map(|t| t.borrow().clone()).collect()))
     }
 }
 
@@ -1038,8 +1010,8 @@ impl fmt::Display for MutReferenceX {
             MutReferenceX::Slice(m, t1, t2) =>
                 write!(
                     f, "{}[{}..{}]", m,
-                    t1.as_ref().unwrap_or(&TermX::var(&Var::from(""))),
-                    t2.as_ref().unwrap_or(&TermX::var(&Var::from(""))),
+                    t1.as_ref().unwrap_or(&TermX::var("")),
+                    t2.as_ref().unwrap_or(&TermX::var("")),
                 ),
         }
     }
