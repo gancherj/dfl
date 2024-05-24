@@ -151,6 +151,7 @@ ProcResource: ProcResource = {
 
 Decl: Decl = {
     <start:@L> "const" <n:Const> ":" <t:BaseTypeWithRef> <end:@R> => Decl::Const(Spanned::spanned(start, end, ConstDeclX { name: n, typ: t })),
+    <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => Decl::Perm(Spanned::spanned(start, end, PermDeclX { name: v, param_typs: p })),
     <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => Decl::Mut(Spanned::spanned(start, end, MutDeclX { name: n, typ: t })),
     <start:@L> "chan" <n:ChanName> ":" <t:BaseTypeWithRef> "|" <p:Permission> <end:@R> =>
         Decl::Chan(Spanned::spanned(start, end, ChanDeclX { name: n, typ: t, perm: p })),

@@ -125,6 +125,13 @@ pub struct ConstDeclX {
     pub typ: BaseType,
 }
 
+pub type PermDecl = RcSpanned<PermDeclX>;
+#[derive(Debug)]
+pub struct PermDeclX {
+    pub name: PermVar,
+    pub param_typs: Vec<BaseType>,
+}
+
 pub type MutDecl = RcSpanned<MutDeclX>;
 #[derive(Debug)]
 pub struct MutDeclX {
@@ -167,6 +174,7 @@ pub struct ProcDeclX {
 #[derive(Debug)]
 pub enum Decl {
     Const(ConstDecl),
+    Perm(PermDecl),
     Mut(MutDecl),
     Chan(ChanDecl),
     Proc(ProcDecl),
@@ -179,6 +187,7 @@ pub struct Program {
 #[derive(Debug)]
 pub struct Ctx {
     pub consts: IndexMap<Const, ConstDecl>,
+    pub perms: IndexMap<PermVar, PermDecl>,
     pub muts: IndexMap<MutName, MutDecl>,
     pub chans: IndexMap<ChanName, ChanDecl>,
     pub procs: IndexMap<ProcName, ProcDecl>,
@@ -188,6 +197,7 @@ impl Ctx {
     pub fn new() -> Ctx {
         Ctx {
             consts: IndexMap::new(),
+            perms: IndexMap::new(),
             muts: IndexMap::new(),
             chans: IndexMap::new(),
             procs: IndexMap::new(),
@@ -217,6 +227,19 @@ impl Ctx {
                         return Err(format!("duplicate mutable declaration {:?}", decl.name));
                     }
                     ctx.muts.insert(decl.name.clone(), decl.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // Collect all permissions
+        for decl in &prog.decls {
+            match decl {
+                Decl::Perm(decl) => {
+                    if ctx.perms.contains_key(&decl.name) {
+                        return Err(format!("duplicate permission variable declaration {:?}", decl.name));
+                    }
+                    ctx.perms.insert(decl.name.clone(), decl.clone());
                 }
                 _ => {}
             }

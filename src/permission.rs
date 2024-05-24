@@ -1,11 +1,11 @@
+/// AST for permission constraints
+
 /**
  * Semantically, for example,
  * if mut A: [[int]]
  * [write A] := write A[i][j] for all i, j
  * [write A[n..m]] := write A[i][j] for any n <= i < m, and any j
  */
-
-/// AST for permission constraints
 
 use std::fmt;
 use std::rc::Rc;
@@ -29,6 +29,24 @@ pub struct PermJudgment {
     pub local: LocalCtx,
     pub local_constraints: Vector<Term>,
     pub perm_constraint: PermConstraint,
+}
+
+/// Interpretation of constants, local variables
+/// and permission variables as background SMT objects
+pub struct Interpretation {
+    consts: IndexMap<Const, smt::Term>,
+    vars: IndexMap<Var, smt::Term>,
+    perms: IndexMap<PermVar, smt::Term>,
+}
+
+impl Interpretation {
+    fn new() -> Interpretation {
+        Interpretation {
+            consts: IndexMap::new(),
+            vars: IndexMap::new(),
+            perms: IndexMap::new(),
+        }
+    }
 }
 
 impl fmt::Display for PermJudgment {
@@ -63,14 +81,10 @@ impl Ctx {
 impl TermX {
     /// Encode the term as an SMT term
     /// All free variables and constants are introduced as SMT constants
-    pub fn as_smt_term(
-        term: &Term,
-        const_interp: &IndexMap<Const, smt::Term>,
-        var_interp: &IndexMap<Var, smt::Term>,
-    ) -> Result<smt::Term, Error> {
+    pub fn as_smt_term(term: &Term, interp: &Interpretation) -> Result<smt::Term, Error> {
         match &term.x {
-            TermX::Var(v) => var_interp.get(v).cloned().ok_or(Error::spanned(term.span, format!("undefined variable {v}"))),
-            TermX::Const(c) => const_interp.get(c).cloned().ok_or(Error::spanned(term.span, format!("undefined constant {c}"))),
+            TermX::Var(v) => interp.vars.get(v).cloned().ok_or(Error::spanned(term.span, format!("undefined variable {v}"))),
+            TermX::Const(c) => interp.consts.get(c).cloned().ok_or(Error::spanned(term.span, format!("undefined constant {c}"))),
             TermX::Bool(b) => Ok(smt::TermX::bool(*b)),
             TermX::Int(i) => if *i >= 0 {
                 Ok(smt::TermX::int(*i as u64))
@@ -80,31 +94,31 @@ impl TermX {
             TermX::Ref(..) => unimplemented!("reference"),
             TermX::Add(t1, t2) =>
                 Ok(smt::TermX::add(
-                    TermX::as_smt_term(t1, const_interp, var_interp)?,
-                    TermX::as_smt_term(t2, const_interp, var_interp)?,
+                    TermX::as_smt_term(t1, interp)?,
+                    TermX::as_smt_term(t2, interp)?,
                 )),
             TermX::Mul(t1, t2) =>
                 Ok(smt::TermX::mul(
-                    TermX::as_smt_term(t1, const_interp, var_interp)?,
-                    TermX::as_smt_term(t2, const_interp, var_interp)?,
+                    TermX::as_smt_term(t1, interp)?,
+                    TermX::as_smt_term(t2, interp)?,
                 )),
             TermX::And(t1, t2) =>
                 Ok(smt::TermX::and([
-                    TermX::as_smt_term(t1, const_interp, var_interp)?,
-                    TermX::as_smt_term(t2, const_interp, var_interp)?,
+                    TermX::as_smt_term(t1, interp)?,
+                    TermX::as_smt_term(t2, interp)?,
                 ])),
             TermX::Less(t1, t2) =>
                 Ok(smt::TermX::lt(
-                    TermX::as_smt_term(t1, const_interp, var_interp)?,
-                    TermX::as_smt_term(t2, const_interp, var_interp)?,
+                    TermX::as_smt_term(t1, interp)?,
+                    TermX::as_smt_term(t2, interp)?,
                 )),
             TermX::Equal(t1, t2) =>
                 Ok(smt::TermX::eq(
-                    TermX::as_smt_term(t1, const_interp, var_interp)?,
-                    TermX::as_smt_term(t2, const_interp, var_interp)?,
+                    TermX::as_smt_term(t1, interp)?,
+                    TermX::as_smt_term(t2, interp)?,
                 )),
             TermX::Not(t) =>
-                Ok(smt::TermX::not(TermX::as_smt_term(t, const_interp, var_interp)?)),
+                Ok(smt::TermX::not(TermX::as_smt_term(t, interp)?)),
         }
     }
 }
@@ -112,12 +126,21 @@ impl TermX {
 impl PermissionX {
     /// Encode a permission as an SMT term indicating whether
     /// the permission is true at the given mutable, indices, and fraction index
+    /// 
+    /// In other words, given free variables { x_1, ..., x_n }
+    /// a permission is interpreted as a relation
+    /// R(x_1, ..., x_n, mut_idx: Int, i_1: Int, ..., i_m: Int, frac_idx: Int): Bool
+    /// which is true iff
+    /// the permission read(frac_idx) <mut_idx>[i_1]...[i_m] is set
+    /// given the values for x_1, ..., x_n
+    /// 
+    /// Some parts of the relation R is not used but we leave them
+    /// unconstrained (e.g. if a mutable is only 1-dim, i_2, ..., i_m is not used)
     pub fn as_smt_term(
         perm: &Permission,
         ctx: &Ctx,
 
-        const_interp: &IndexMap<Const, smt::Term>,
-        var_interp: &IndexMap<Var, smt::Term>,
+        interp: &Interpretation,
         mut_idx: &smt::Term,
         indices: &[smt::Term],
         frac_idx: &smt::Term,
@@ -126,19 +149,19 @@ impl PermissionX {
             PermissionX::Empty => Ok(smt::TermX::bool(false)),
             PermissionX::Add(p1, p2) =>
                 Ok(smt::TermX::or([
-                    PermissionX::as_smt_term(p1, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,
-                    PermissionX::as_smt_term(p2, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,
+                    PermissionX::as_smt_term(p1, ctx, interp, mut_idx, indices, frac_idx)?,
+                    PermissionX::as_smt_term(p2, ctx, interp, mut_idx, indices, frac_idx)?,
                 ])),
             PermissionX::Sub(p1, p2) =>
                 Ok(smt::TermX::and([
-                    PermissionX::as_smt_term(p1, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,
-                    smt::TermX::not(PermissionX::as_smt_term(p2, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,),
+                    PermissionX::as_smt_term(p1, ctx, interp, mut_idx, indices, frac_idx)?,
+                    smt::TermX::not(PermissionX::as_smt_term(p2, ctx, interp, mut_idx, indices, frac_idx)?,),
                 ])),
             PermissionX::Ite(t, p1, p2) =>
                 Ok(smt::TermX::ite(
-                    TermX::as_smt_term(t, const_interp, var_interp)?,
-                    PermissionX::as_smt_term(p1, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,
-                    PermissionX::as_smt_term(p2, ctx, const_interp, var_interp, mut_idx, indices, frac_idx)?,
+                    TermX::as_smt_term(t, interp)?,
+                    PermissionX::as_smt_term(p1, ctx, interp, mut_idx, indices, frac_idx)?,
+                    PermissionX::as_smt_term(p2, ctx, interp, mut_idx, indices, frac_idx)?,
                 )),
             PermissionX::Fraction(frac, mut_ref) => {
                 // Conditinos for the permission to be true at the given location
@@ -185,17 +208,17 @@ impl PermissionX {
                         MutReferenceX::Base(..) => unreachable!(),
                         MutReferenceX::Deref(..) => unreachable!(),
                         MutReferenceX::Index(_, t) => {
-                            conditions.push(smt::TermX::eq(idx, TermX::as_smt_term(t, const_interp, var_interp)?));
+                            conditions.push(smt::TermX::eq(idx, TermX::as_smt_term(t, interp)?));
                         }
                         MutReferenceX::Slice(_, t1, t2) => {
                             // t1 <= idx
                             if let Some(t1) = t1 {
-                                conditions.push(smt::TermX::lte(TermX::as_smt_term(t1, const_interp, var_interp)?, idx));
+                                conditions.push(smt::TermX::lte(TermX::as_smt_term(t1, interp)?, idx));
                             }
 
                             // idx < t2
                             if let Some(t2) = t2 {
-                                conditions.push(smt::TermX::lt(idx, TermX::as_smt_term(t2, const_interp, var_interp)?));
+                                conditions.push(smt::TermX::lt(idx, TermX::as_smt_term(t2, interp)?));
                             }
                         }
                     }
@@ -203,7 +226,25 @@ impl PermissionX {
 
                 Ok(smt::TermX::and(conditions))
             }
-            PermissionX::Var(..) => Error::spanned_err(perm.span, format!("permission variable not supported for SMT encoding"))
+            PermissionX::Var(v, terms) => {
+                let encodings = terms.iter()
+                    .map(|t| TermX::as_smt_term(t, interp))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let perm_interp = interp.perms.get(v)
+                    .ok_or(Error::spanned(perm.span, format!("permission variable `{}` does not exist", v)))?;
+
+                Ok(smt::TermX::app_term(
+                    perm_interp,
+                    encodings.iter()
+                        .chain(interp.consts.values())
+                        .chain(interp.vars.values())
+                        .chain([mut_idx])
+                        .chain(indices)
+                        .chain([frac_idx]),
+                ))
+            }
+            // Error::spanned_err(perm.span, format!("permission variable not supported for SMT encoding"))
         }
     }
 }
@@ -212,32 +253,63 @@ impl PermJudgment {
     /// Encode the invalidity of the permission judgment as an SMT term
     pub fn encode_invalidity(&self, smt_ctx: &mut EncodingCtx, ctx: &Ctx, num_fractions: u64) -> Result<smt::Term, Error> {
         // Set up constant and variable interpretations
-        let mut const_interp = IndexMap::new();
-        let mut var_interp = IndexMap::new();
+        let mut interp = Interpretation::new();
 
-        for c in ctx.consts.values() {
-            if let Some(sort) = c.typ.as_smt_sort() {
-                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("const_{}", c.name.as_str()), sort));
-                const_interp.insert(c.name.clone(), fresh_var);
+        for decl in ctx.consts.values() {
+            if let Some(sort) = decl.typ.as_smt_sort() {
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_const(format!("const_{}", decl.name.as_str()), sort));
+                interp.consts.insert(decl.name.clone(), fresh_var);
             } // ignore unsupported sort
         }
 
         for (v, t) in &self.local.vars {
             if let Some(sort) = t.as_smt_sort() {
-                let fresh_var = smt::TermX::var(smt_ctx.fresh_var(format!("var_{}", v.as_str()), sort));
-                var_interp.insert(v.clone(), fresh_var);
+                let fresh_var = smt::TermX::var(smt_ctx.fresh_const(format!("var_{}", v.as_str()), sort));
+                interp.vars.insert(v.clone(), fresh_var);
             } // ignore unsupported sort
         }
 
+        for decl in ctx.perms.values() {
+            // TODO
+        }
+
+        // Variables for the mutables and fractions
+        let mut_idx = &smt::TermX::var(smt_ctx.fresh_const("mut_idx", smt::Sort::Int));
+        let frac_idx = &smt::TermX::var(smt_ctx.fresh_const("frac_idx", smt::Sort::Int));
+
+        // Find the largest number of dimensions in any mutable
+        let max_dim = ctx.muts.values().map(|decl| decl.typ.get_dimensions()).max().unwrap_or(0);
+
+        // Create max_dim many indices
+        let indices: Vec<_> = (0..max_dim)
+            .map(|_| smt::TermX::var(smt_ctx.fresh_const("arr_idx", smt::Sort::Int)))
+            .collect();
+        
+        // Bound arr_idx >= 0 (and maybe < length of the mutable too?)
+        let indices_constraint: Vec<_> = indices.iter()
+            .map(|i| smt::TermX::lte(smt::TermX::int(0), i))
+            .collect();
+
         Ok(smt::TermX::and([
-            // Add local constraints
+            // Add local constraints (path conditions)
             smt::TermX::and(self.local_constraints.iter()
-                .map(|c| TermX::as_smt_term(c, &const_interp, &var_interp))
+                .map(|c| TermX::as_smt_term(c, &interp))
                 .collect::<Result<Vec<_>, _>>()?
             ),
+
+            // 0 <= mut_idx < |ctx.muts|
+            smt::TermX::lte(smt::TermX::int(0), mut_idx),
+            smt::TermX::lt(mut_idx, smt::TermX::int(ctx.muts.len() as u64)),
+
+            // 0 <= frac_idx < num_fractions
+            smt::TermX::lte(smt::TermX::int(0), frac_idx),
+            smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
+
+            // Indices should be >= 0
+            smt::TermX::and(indices_constraint),
             
             // Negation of the permission constraint
-            self.perm_constraint.encode_invalidity(smt_ctx, ctx, &const_interp, &var_interp, num_fractions)?
+            smt::TermX::not(self.perm_constraint.as_smt_term(smt_ctx, ctx, &interp, mut_idx, &indices, frac_idx, num_fractions)?),
         ]))
     }
 }
@@ -258,13 +330,17 @@ impl PermConstraintX {
     /// Encode the invalidity of the permission constraint to SMT
     /// i.e. if the SMT constraint is unsat, the permission constraint
     /// is valid.
-    pub fn encode_invalidity(
+    pub fn as_smt_term(
         &self,
         smt_ctx: &mut EncodingCtx,
         ctx: &Ctx,
+        
+        interp: &Interpretation,
 
-        const_interp: &IndexMap<Const, smt::Term>,
-        var_interp: &IndexMap<Var, smt::Term>,
+        mut_idx: &smt::Term,
+        indices: &[smt::Term],
+        frac_idx: &smt::Term,
+
         num_fractions: u64,
     ) -> Result<smt::Term, Error> {
         // For all mutable m, and for any indices i_1, ..., i_n of m
@@ -273,84 +349,55 @@ impl PermConstraintX {
         
         match self {
             PermConstraintX::LessEq(p1, p2) => {
-                // Variable for the mutable
-                let mut_idx_name = smt_ctx.fresh_var("mut_idx", smt::Sort::Int);
-                let frac_idx_name = smt_ctx.fresh_var("frac_idx", smt::Sort::Int);
-
-                let mut_idx = &smt::TermX::var(&mut_idx_name);
-                let frac_idx = &smt::TermX::var(&frac_idx_name);
-
-                // Find the largest number of dimensions in any mutable
-                let max_dim = ctx.muts.values().map(|decl| decl.typ.get_dimensions()).max().unwrap_or(0);
-
-                // Create max_dim many indices
-                let indices: Vec<_> = (0..max_dim)
-                    .map(|_| smt::TermX::var(smt_ctx.fresh_var("arr_idx", smt::Sort::Int)))
-                    .collect();
-                
-                // Bound arr_idx >= 0 (and maybe < length of the mutable too?)
-                let indices_constraint: Vec<_> = indices.iter()
-                    .map(|i| smt::TermX::lte(smt::TermX::int(0), i))
-                    .collect();
-
                 // Does there exists a mutable, a fraction index, and indices such that
                 // the permission is set at this location for p1 but not for p2
-                Ok(smt::TermX::and([
-                    // 0 <= mut_idx < |ctx.muts|
-                    smt::TermX::lte(smt::TermX::int(0), mut_idx),
-                    smt::TermX::lt(mut_idx, smt::TermX::int(ctx.muts.len() as u64)),
-
-                    // 0 <= frac_idx < num_fractions
-                    smt::TermX::lte(smt::TermX::int(0), frac_idx),
-                    smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
-
-                    smt::TermX::and(indices_constraint),
-
-                    smt::TermX::not(
-                        smt::TermX::implies(
-                            PermissionX::as_smt_term(p1, ctx, &const_interp, &var_interp, &mut_idx, &indices, &frac_idx)?,
-                            PermissionX::as_smt_term(p2, ctx, &const_interp, &var_interp, &mut_idx, &indices, &frac_idx)?,
-                        ),
-                    ),
-                ]))
+                Ok(smt::TermX::implies(
+                    PermissionX::as_smt_term(p1, ctx, interp, mut_idx, indices, frac_idx)?,
+                    PermissionX::as_smt_term(p2, ctx, interp, mut_idx, indices, frac_idx)?,
+                ))
             }
             PermConstraintX::Disjoint(..) => unimplemented!("disjoint permission constraint"),
-            PermConstraintX::HasRead(mut_ref, p) => {
-                // has_read(ref, p) <=> read(0) <= p \/ ... \/ read(k - 1) <= p
-                let mut conditions = Vec::new();
+            PermConstraintX::HasRead(mut_ref, p) => {            
+                // let mut conditions = Vec::new();
 
-                for k in 0..num_fractions {
-                    conditions.push(Rc::new(PermConstraintX::LessEq(
-                        Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
-                        p.clone(),
-                    )).encode_invalidity(smt_ctx, ctx, const_interp, var_interp, num_fractions)?);
-                }
+                // for k in 0..num_fractions {
+                //     conditions.push(Rc::new(PermConstraintX::LessEq(
+                //         Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
+                //         p.clone(),
+                //     )).as_smt_term(smt_ctx, ctx, interp, &mut_idx, &indices, &frac_idx, num_fractions)?);
+                // }
 
-                Ok(smt::TermX::and(conditions))
+                // Ok(smt::TermX::and(conditions))
 
-                // // forall 0 <= frac_idx < num_fractions. not (read(frac_idx) <= p)
-                // Ok(smt::TermX::forall(
-                //     [(frac_idx_name, smt::Sort::Int)],
-                //     smt::TermX::implies(
-                //         // 0 <= frac_idx < num_fractions
-                //         smt::TermX::and([
-                //             smt::TermX::lte(smt::TermX::int(0), frac_idx),
-                //             smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
-                //         ]),
-                //         smt::TermX::not(
-                //             smt::TermX::implies(
-                //                 Rc::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())).as_smt_term(ctx, &const_interp, &var_interp, &mut_idx, &indices, &frac_idx)?,
-                //                 PermissionX::as_smt_term(p, ctx, &const_interp, &var_interp, &mut_idx, &indices, &frac_idx)?,
-                //             ),
-                //         ),
-                //     ),
-                // ))
+                // has_read(ref, p)
+                // iff read(0) <= p \/ ... \/ read(k - 1) <= p
+                // iff exists frac_idx. read(frac_idx) <= p
+                
+                let frac_idx_name = &smt_ctx.fresh_ident("frac_idx");
+                let frac_idx = &smt::TermX::var(frac_idx_name);
+
+                Ok(smt::TermX::forall(
+                    [(frac_idx_name, smt::Sort::Int)],
+                    smt::TermX::implies(
+                        smt::TermX::and([
+                        // 0 <= frac_idx < num_fractions
+                            smt::TermX::lte(smt::TermX::int(0), frac_idx),
+                            smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
+                        ]),
+
+                        Rc::new(PermConstraintX::LessEq(
+                            // NOTE: using ::Write here is intensional
+                            Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
+                            p.clone(),
+                        )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx, num_fractions)?,
+                    ),
+                ))
             }
             PermConstraintX::HasWrite(mut_ref, p) =>
                 Rc::new(PermConstraintX::LessEq(
                     Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
                     p.clone(),
-                )).encode_invalidity(smt_ctx, ctx, const_interp, var_interp, num_fractions),
+                )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx, num_fractions),
         }
     }
 }

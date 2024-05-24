@@ -22,6 +22,10 @@ struct Args {
     /// Disable permission check, only print permission constraints
     #[arg(long, default_value_t = false)]
     no_perm_check: bool,
+
+    // Number of fractions
+    #[arg(long, default_value_t = 3)]
+    num_fractions: u64,
 }
 
 fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
@@ -88,7 +92,7 @@ fn main() {
             let ctx = Ctx::from(&program).unwrap();
             // println!("{:?}", ctx);
             
-            match ctx.type_check(if args.no_perm_check { None } else { Some(&mut solver) } ) {
+            match ctx.type_check(if args.no_perm_check { None } else { Some(&mut solver) }, args.num_fractions) {
                 Ok(()) => println!("type checked"),
                 Err(err) => {
                     let loc = match err.span {

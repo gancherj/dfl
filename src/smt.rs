@@ -6,6 +6,7 @@ use std::fmt;
 use std::process;
 use std::io;
 use std::io::{Write, BufReader};
+use im::HashSet;
 use wait_timeout::ChildExt;
 use std::time::Duration;
 use indexmap::IndexMap;
@@ -42,9 +43,9 @@ pub enum TermX {
     Quant(QuantKind, Vec<SortedVar>, Term),
 }
 
-pub type ConstDecl = Rc<ConstDeclX>;
+pub type VarDecl = Rc<VarDeclX>;
 #[derive(Debug)]
-pub struct ConstDeclX {
+pub struct VarDeclX {
     pub name: Ident,
     pub sort: Sort,
 }
@@ -62,7 +63,7 @@ pub type Command = Rc<CommandX>;
 pub enum CommandX {
     Push,
     Pop,
-    DeclareConst(ConstDecl),
+    DeclareConst(VarDecl),
     DeclareFun(FunDecl),
     Assert(Term),
     CheckSat,
@@ -70,6 +71,12 @@ pub enum CommandX {
     Exit,
     SetOption(Vec<String>),
     SetLogic(String),
+
+    // Some commands for SyGuS
+    SynthFun(FunDecl),
+    DeclareVar(VarDecl),
+    Constraint(Term),
+    CheckSynth,
 }
 
 pub struct Solver {
@@ -84,8 +91,8 @@ pub struct Solver {
 pub struct EncodingCtx {
     prefix: String,
     fresh_var_count: u64,
-    consts: IndexMap<Ident, ConstDecl>,
-    funs: IndexMap<Ident, FunDecl>,
+    commands: Vec<Command>,
+    used_names: HashSet<Ident>,
 }
 
 impl EncodingCtx {
@@ -93,75 +100,65 @@ impl EncodingCtx {
         EncodingCtx {
             prefix: prefix.into(),
             fresh_var_count: 0,
-            consts: IndexMap::new(),
-            funs: IndexMap::new(),
+            commands: Vec::new(),
+            used_names: HashSet::new(),
         }
     }
 
     /// Generate a variable with the given name and sort
     /// If the variable already exists, return the same one
-    pub fn new_var(&mut self, name: impl AsRef<str>, sort: Sort) -> Ident {
-        let name: Ident = format!("{}_{}", self.prefix, name.as_ref()).into();
-        if self.consts.contains_key(&name) {
-            assert!(self.consts.get(&name).unwrap().sort == sort);
-        } else {
-            self.consts.insert(name.clone(), Rc::new(ConstDeclX {
-                name: name.clone(),
-                sort: sort,
-            }));
+    // pub fn new_var(&mut self, name: impl AsRef<str>, sort: Sort) -> Ident {
+    //     let name: Ident = format!("{}_{}", self.prefix, name.as_ref()).into();
+    //     if self.consts.contains_key(&name) {
+    //         assert!(self.consts.get(&name).unwrap().sort == sort);
+    //     } else {
+    //         self.consts.insert(name.clone(), Rc::new(VarDeclX {
+    //             name: name.clone(),
+    //             sort: sort,
+    //         }));
+    //     }
+    //     name
+    // }
+
+    /// Find the next fresh name
+    pub fn fresh_ident(&mut self, prefix: impl AsRef<str>) -> Ident {
+        let mut name;
+        loop {
+            name = Ident::from(format!("{}_{}_{}", self.prefix, prefix.as_ref(), self.fresh_var_count));
+            self.fresh_var_count += 1;
+            if !self.used_names.contains(&name) {
+                return name;
+            }
         }
+    }
+
+    pub fn fresh_const(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
+        let name = self.fresh_ident(prefix);
+        self.commands.push(CommandX::declare_const(&name, sort));
         name
     }
 
-    /// Generate a fresh variable of the given sort
     pub fn fresh_var(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
-        // Find the next fresh name
-        let mut name;
-        loop {
-            name = Ident::from(format!("{}_{}_{}", self.prefix, prefix.as_ref(), self.fresh_var_count));
-            self.fresh_var_count += 1;
-            if !self.consts.contains_key(&name) {
-                break
-            }
-        }
-        self.consts.insert(name.clone(), Rc::new(ConstDeclX {
-            name: name.clone(),
-            sort: sort,
-        }));
+        let name = self.fresh_ident(prefix);
+        self.commands.push(CommandX::declare_var(&name, sort));
         name
     }
 
-    /// Generate a fresh function of the given sort
     pub fn fresh_fun(&mut self, prefix: impl AsRef<str>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Ident {
-        // Find the next fresh name
-        let mut name;
-        loop {
-            name = Ident::from(format!("{}_{}_{}", self.prefix, prefix.as_ref(), self.fresh_var_count));
-            self.fresh_var_count += 1;
-            if !self.consts.contains_key(&name) {
-                break
-            }
-        }
-        self.funs.insert(name.clone(), Rc::new(FunDeclX {
-            name: name.clone(),
-            inputs: inputs.into_iter().collect(),
-            sort: sort,
-        }));
+        let name = self.fresh_ident(prefix);
+        self.commands.push(CommandX::declare_fun(&name, inputs, sort));
         name
     }
 
-    pub fn to_commands(&mut self) -> Vec<Command> {
-        let mut cmds = Vec::new();
+    /// Generate a fresh synth-fun function of the given sort
+    pub fn fresh_synth_fun(&mut self, prefix: impl AsRef<str>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Ident {
+        let name = self.fresh_ident(prefix);
+        self.commands.push(CommandX::synth_fun(&name, inputs, sort));
+        name
+    }
 
-        for c in self.consts.values() {
-            cmds.push(Rc::new(CommandX::DeclareConst(c.clone())));
-        }
-
-        for f in self.funs.values() {
-            cmds.push(Rc::new(CommandX::DeclareFun(f.clone())));
-        }
-
-        cmds
+    pub fn to_commands(&self) -> &Vec<Command> {
+        &self.commands
     }
 }
 
@@ -198,6 +195,10 @@ impl TermX {
 
     pub fn app(id: impl Into<Ident>, args: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
         Rc::new(TermX::App(TermX::var(id), args.into_iter().map(|a| a.borrow().clone()).collect()))
+    }
+
+    pub fn app_term(term: impl Borrow<Term>, args: impl IntoIterator<Item=impl Borrow<Term>>) -> Term {
+        Rc::new(TermX::App(term.borrow().clone(), args.into_iter().map(|a| a.borrow().clone()).collect()))
     }
 
     pub fn add(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
@@ -263,11 +264,25 @@ impl TermX {
             body.borrow().clone(),
         ))
     }
+
+    pub fn exists(vars: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, body: impl Borrow<Term>) -> Term {
+        Rc::new(TermX::Quant(
+            QuantKind::Exists,
+            vars.into_iter()
+                .map(|(name, sort)| SortedVar { name: name.into(), sort: sort })
+                .collect(),
+            body.borrow().clone(),
+        ))
+    }
 }
 
 impl CommandX {
     pub fn check_sat() -> Command {
         Rc::new(CommandX::CheckSat)
+    }
+
+    pub fn check_synth() -> Command {
+        Rc::new(CommandX::CheckSynth)
     }
 
     pub fn get_model() -> Command {
@@ -287,11 +302,27 @@ impl CommandX {
     }
 
     pub fn declare_const(id: impl Into<Ident>, sort: Sort) -> Command {
-        Rc::new(CommandX::DeclareConst(Rc::new(ConstDeclX { name: id.into(), sort: sort })))
+        Rc::new(CommandX::DeclareConst(Rc::new(VarDeclX { name: id.into(), sort: sort })))
+    }
+
+    pub fn declare_var(id: impl Into<Ident>, sort: Sort) -> Command {
+        Rc::new(CommandX::DeclareVar(Rc::new(VarDeclX { name: id.into(), sort: sort })))
+    }
+
+    pub fn declare_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Command {
+        Rc::new(CommandX::DeclareFun(Rc::new(FunDeclX { name: id.into(), inputs: inputs.into_iter().collect(), sort: sort })))
+    }
+
+    pub fn synth_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Command {
+        Rc::new(CommandX::SynthFun(Rc::new(FunDeclX { name: id.into(), inputs: inputs.into_iter().collect(), sort: sort })))
     }
 
     pub fn assert(term: impl Borrow<Term>) -> Command {
         Rc::new(CommandX::Assert(term.borrow().clone()))
+    }
+
+    pub fn constraint(term: impl Borrow<Term>) -> Command {
+        Rc::new(CommandX::Constraint(term.borrow().clone()))
     }
 
     pub fn set_logic(logic: impl Into<String>) -> Command {
@@ -471,15 +502,15 @@ impl fmt::Display for TermX {
     }
 }
 
-impl fmt::Display for ConstDeclX {
+impl fmt::Display for VarDeclX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "(declare-const {} {})", self.name, self.sort)
+        write!(f, "{} {}", self.name, self.sort)
     }
 }
 
 impl fmt::Display for FunDeclX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "(declare-fun {} (", self.name)?;
+        write!(f, "{} (", self.name)?;
         for (pos, sort) in self.inputs.iter().enumerate() {
             if pos == 0 {
                 write!(f, "{}", sort)?;
@@ -487,7 +518,7 @@ impl fmt::Display for FunDeclX {
                 write!(f, " {}", sort)?;
             }
         }
-        write!(f, ") {})", self.sort)
+        write!(f, ") {}", self.sort)
     }
 }
 
@@ -496,14 +527,18 @@ impl fmt::Display for CommandX {
         match self {
             CommandX::Push => write!(f, "(push)"),
             CommandX::Pop => write!(f, "(pop)"),
-            CommandX::DeclareConst(decl) => write!(f, "{}", decl),
-            CommandX::DeclareFun(decl) => write!(f, "{}", decl),
+            CommandX::DeclareConst(decl) => write!(f, "(declare-const {})", decl),
+            CommandX::DeclareFun(decl) => write!(f, "(declare-fun {})", decl),
             CommandX::Assert(t) => write!(f, "(assert {})", t),
             CommandX::CheckSat => write!(f, "(check-sat)"),
             CommandX::GetModel => write!(f, "(get-model)"),
             CommandX::Exit => write!(f, "(exit)"),
             CommandX::SetOption(options) => write!(f, "(set-option {})", options.join(" ")),
             CommandX::SetLogic(logic) => write!(f, "(set-logic {})", logic),
+            CommandX::DeclareVar(decl) => write!(f, "(declare-var {})", decl),
+            CommandX::SynthFun(decl) => write!(f, "(synth-fun {})", decl),
+            CommandX::Constraint(t) => write!(f, "(constraint {})", t),
+            CommandX::CheckSynth => write!(f, "(check-synth)"),
         }
     }
 }

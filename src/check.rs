@@ -265,9 +265,24 @@ impl PermissionX {
             }
             // TODO: should we allow deref in permission?
             PermissionX::Fraction(_, mut_ref) => MutReferenceX::type_check(mut_ref, ctx, local).map(|_| ()),
-            PermissionX::Var(_, terms) => {
-                for t in terms {
-                    TermX::type_check(t, ctx, local)?;
+            PermissionX::Var(v, terms) => {
+                let decl = ctx.perms.get(v)
+                    .ok_or(Error::spanned(perm.span, format!("permission variable `{}` not declared", v)))?;
+
+                if decl.param_typs.len() != terms.len() {
+                    return Error::spanned_err(
+                        perm.span,
+                        format!("unmatched number of arguments provided for permission variable `{}`: expect {}, given {}", v, decl.param_typs.len(), terms.len()),
+                    );
+                }
+
+                for (typ, term) in decl.param_typs.iter().zip(terms) {
+                    if !TermX::type_check(term, ctx, local)?.is_subtype(typ) {
+                        return Error::spanned_err(
+                            perm.span,
+                            format!("unmatched argument type for permission variable `{}`", v),
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -535,7 +550,7 @@ impl ProcX {
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(&self, mut solver_opt: Option<&mut smt::Solver>) -> Result<(), Error> {
+    pub fn type_check(&self, mut solver_opt: Option<&mut smt::Solver>, num_fractions: u64) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
         // Check mutable types are all non-reference types
@@ -615,7 +630,7 @@ impl Ctx {
                 for constraint in &constraints {
                     smt_constraints.push(
                         constraint
-                            .encode_invalidity(&mut smt_ctx, self, 5)?,
+                            .encode_invalidity(&mut smt_ctx, self, num_fractions)?,
                     );
                 }
 
@@ -640,6 +655,7 @@ impl Ctx {
                         }
                         smt::SatResult::Unsat => {
                             println!("  valid: {}", constraint);
+                            println!("  encoding: {}", smt_constraint);
                         }
                         smt::SatResult::Unknown => {
                             println!("  unknown: {}", constraint);
@@ -650,6 +666,8 @@ impl Ctx {
 
                 solver.pop().expect("failed to pop");
             } else {
+                println!("permission constraints for `{}`:", decl.name);
+
                 // No solver provided, we just print out permission constraints
                 for constraint in constraints {
                     println!("  {}", constraint);
