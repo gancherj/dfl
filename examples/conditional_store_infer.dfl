@@ -1,0 +1,71 @@
+mut A: bool
+
+perm P1(bool)
+perm P2(bool)
+perm P3(bool)
+perm P4(bool)
+perm P5(bool)
+perm P6(bool)
+perm P7(bool)
+perm P8(bool)
+
+chan St1Sync: bool | P1(St1Sync)
+chan St2Sync: bool | P2(St2Sync)
+
+chan LdSync: bool | P3(LdSync)
+
+chan Merge1: bool | P4(Merge1)
+chan Merge2: bool | P5(Merge2)
+chan MergeDecider: bool | P6(MergeDecider)
+
+chan Steer1D: bool | P7(Steer1D)
+chan Steer2D: bool | P8(Steer2D)
+
+proc Merge | in MergeDecider, in Merge1, in Merge2, out LdSync =
+    recv d <- MergeDecider
+    if d then
+        recv x <- Merge1
+        send x -> LdSync
+        Merge
+    else
+        recv x <- Merge2
+        send x -> LdSync
+        Merge
+    end
+
+proc Ld | in LdSync, out Steer1D, out Steer2D =
+    recv _ <- LdSync
+    read x <- A
+    send x -> Steer1D
+    send x -> Steer2D
+    Ld
+
+proc Steer1 | in Steer1D, out St1Sync =
+    recv d <- Steer1D
+    if d then
+        send true -> St1Sync
+        Steer1
+    else
+        Steer1
+    end
+
+proc Steer2 | in Steer2D, out St2Sync =
+    recv d <- Steer2D
+    if not d then
+        send true -> St2Sync
+        Steer2
+    else
+        Steer2
+    end
+
+proc St1 | in St1Sync, out Merge1 =
+    recv _ <- St1Sync
+    write false -> A
+    send true -> Merge1
+    St1
+
+proc St2 | in St2Sync, out Merge2 =
+    recv _ <- St2Sync
+    write true -> A
+    send true -> Merge2
+    St2
