@@ -204,6 +204,10 @@ impl Ctx {
         }
     }
 
+    pub fn max_mut_dim(&self) -> usize {
+        self.muts.values().map(|decl| decl.typ.get_dimensions()).max().unwrap_or(0)
+    }
+
     /// Process a parsed AST into a context
     /// This do some preprocessing including
     /// replacing constants and some notations like

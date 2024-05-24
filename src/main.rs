@@ -6,7 +6,7 @@ pub mod permission;
 pub mod smt;
 pub mod span;
 
-use crate::ast::*;
+use crate::{ast::*, check::PermCheckMode};
 
 use clap::{command, Parser};
 use lalrpop_util::{lalrpop_mod, ParseError};
@@ -19,17 +19,25 @@ struct Args {
     /// Source file
     source: String,
 
-    /// Disable permission check, only print permission constraints
+    /// Enable permission check
     #[arg(long, default_value_t = false)]
-    no_perm_check: bool,
+    check_perm: bool,
+
+    /// Enable permission inference
+    #[arg(long, default_value_t = false)]
+    infer_perm: bool,
+
+    /// Path to the SMT solver
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "z3")]
+    solver: String,
+
+    /// Options for the SMT solver
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "-in")]
+    solver_opts: Vec<String>,
 
     /// Number of fractions
     #[arg(long, default_value_t = 3)]
     num_fractions: u64,
-
-    /// Enable permission inference
-    #[arg(long, default_value_t = false)]
-    infer: bool,
 }
 
 fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
@@ -89,20 +97,25 @@ fn main() {
     let path = &args.source;
     let src = fs::read_to_string(path).expect("failed to read input file");
     let parsed = dfl::ProgramParser::new().parse(&src);
-    let mut solver = smt::Solver::new("./cvc5", &["--no-interactive", "--sygus", "--lang", "sygus2"]).expect("failed to create solver");
-
-    solver.set_logic("LIA").expect("failed to set logic");
 
     match parsed {
         Ok(program) => {
             let ctx = Ctx::from(&program).unwrap();
             // println!("{:?}", ctx);
+
+            assert!(!(args.check_perm && args.infer_perm));
+
+            let mut mode = if args.check_perm {
+                PermCheckMode::Check(smt::Solver::new(args.solver, &args.solver_opts).expect("failed to create solver"))
+            } else if args.infer_perm {
+                let mut solver = smt::Solver::new(args.solver, &args.solver_opts).expect("failed to create solver");
+                solver.set_logic("LIA").expect("failed to set logic");
+                PermCheckMode::Infer(solver)
+            } else {
+                PermCheckMode::None
+            };
             
-            match ctx.type_check(
-                if args.no_perm_check { None } else { Some(&mut solver) },
-                args.num_fractions,
-                args.infer,
-            ) {
+            match ctx.type_check(&mut mode, args.num_fractions) {
                 Ok(()) => println!("type checked"),
                 Err(err) => {
                     let loc = match err.span {

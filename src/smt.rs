@@ -174,10 +174,19 @@ impl EncodingCtx {
     }
 }
 
-pub enum SatResult {
+pub enum CheckSatResult {
     Sat,
     Unsat,
     Unknown
+}
+
+// TODO
+pub type SynthModel = String;
+
+pub enum CheckSynthResult {
+    Infeasible,
+    Fail,
+    Synthesized(SynthModel),
 }
 
 impl<T: AsRef<str>> From<T> for Ident {
@@ -394,7 +403,7 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
-        println!("[solver] {}", cmd.borrow());
+        // println!("[solver] {}", cmd.borrow());
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 
@@ -457,17 +466,23 @@ impl Solver {
         self.send_command(CommandX::pop())
     }
 
-    pub fn check_synth(&mut self) -> io::Result<String> {
-        self.send_command_with_output(CommandX::check_synth())
+    pub fn check_synth(&mut self) -> io::Result<CheckSynthResult> {
+        let output = self.send_command_with_output(CommandX::check_synth())?;
+
+        match output.trim() {
+            "infeasible" => Ok(CheckSynthResult::Infeasible),
+            "fail" => Ok(CheckSynthResult::Fail),
+            _ => Ok(CheckSynthResult::Synthesized(output.trim().to_string())),
+        }
     }
 
-    pub fn check_sat(&mut self) -> io::Result<SatResult> {
+    pub fn check_sat(&mut self) -> io::Result<CheckSatResult> {
         let output = self.send_command_with_output(CommandX::check_sat())?;
 
         match output.trim() {
-            "sat" => Ok(SatResult::Sat),
-            "unsat" => Ok(SatResult::Unsat),
-            "unknown" => Ok(SatResult::Unknown),
+            "sat" => Ok(CheckSatResult::Sat),
+            "unsat" => Ok(CheckSatResult::Unsat),
+            "unknown" => Ok(CheckSatResult::Unknown),
             _ => Err(io::Error::other(format!("unexpected solver check-sat output: {}", output))),
         }
     }
@@ -584,12 +599,12 @@ impl fmt::Display for CommandX {
     }
 }
 
-impl fmt::Display for SatResult {
+impl fmt::Display for CheckSatResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SatResult::Sat => write!(f, "sat"),
-            SatResult::Unsat => write!(f, "unsat"),
-            SatResult::Unknown => write!(f, "unknown"),
+            CheckSatResult::Sat => write!(f, "sat"),
+            CheckSatResult::Unsat => write!(f, "unsat"),
+            CheckSatResult::Unknown => write!(f, "unknown"),
         }
     }
 }
