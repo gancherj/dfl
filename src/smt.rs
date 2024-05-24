@@ -9,7 +9,6 @@ use std::io::{Write, BufReader};
 use im::HashSet;
 use wait_timeout::ChildExt;
 use std::time::Duration;
-use indexmap::IndexMap;
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Sort {
@@ -58,6 +57,14 @@ pub struct FunDeclX {
     pub sort: Sort,
 }
 
+pub type SynthFunDecl = Rc<SynthFunDeclX>;
+#[derive(Debug)]
+pub struct SynthFunDeclX {
+    pub name: Ident,
+    pub inputs: Vec<SortedVar>,
+    pub sort: Sort,
+}
+
 pub type Command = Rc<CommandX>;
 #[derive(Debug)]
 pub enum CommandX {
@@ -73,7 +80,7 @@ pub enum CommandX {
     SetLogic(String),
 
     // Some commands for SyGuS
-    SynthFun(FunDecl),
+    SynthFun(SynthFunDecl),
     DeclareVar(VarDecl),
     Constraint(Term),
     CheckSynth,
@@ -151,7 +158,12 @@ impl EncodingCtx {
     }
 
     /// Generate a fresh synth-fun function of the given sort
-    pub fn fresh_synth_fun(&mut self, prefix: impl AsRef<str>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Ident {
+    pub fn fresh_synth_fun(
+        &mut self,
+        prefix: impl AsRef<str>,
+        inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>,
+        sort: Sort,
+    ) -> Ident {
         let name = self.fresh_ident(prefix);
         self.commands.push(CommandX::synth_fun(&name, inputs, sort));
         name
@@ -313,8 +325,14 @@ impl CommandX {
         Rc::new(CommandX::DeclareFun(Rc::new(FunDeclX { name: id.into(), inputs: inputs.into_iter().collect(), sort: sort })))
     }
 
-    pub fn synth_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=Sort>, sort: Sort) -> Command {
-        Rc::new(CommandX::SynthFun(Rc::new(FunDeclX { name: id.into(), inputs: inputs.into_iter().collect(), sort: sort })))
+    pub fn synth_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, sort: Sort) -> Command {
+        Rc::new(CommandX::SynthFun(Rc::new(SynthFunDeclX {
+            name: id.into(),
+            inputs: inputs.into_iter()
+                .map(|(v, s)| SortedVar { name: v.into(), sort: s })
+                .collect(),
+            sort: sort,
+        })))
     }
 
     pub fn assert(term: impl Borrow<Term>) -> Command {
@@ -376,13 +394,14 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
+        println!("[solver] {}", cmd.borrow());
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 
     /// Send a command then wait to read output from the solver
     /// The output is expected to be a single S-expression
     pub fn send_command_with_output(&mut self, cmd: impl Borrow<Command>) -> io::Result<String> {
-        writeln!(self.stdin, "{}", cmd.borrow())?;
+        self.send_command(cmd)?;
 
         let mut output = String::new();
         let mut num_open_paren = 0;
@@ -426,12 +445,20 @@ impl Solver {
         self.send_command(CommandX::assert(term))
     }
 
+    pub fn constraint(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
+        self.send_command(CommandX::constraint(term))
+    }
+
     pub fn push(&mut self) -> io::Result<()> {
         self.send_command(CommandX::push())
     }
 
     pub fn pop(&mut self) -> io::Result<()> {
         self.send_command(CommandX::pop())
+    }
+
+    pub fn check_synth(&mut self) -> io::Result<String> {
+        self.send_command_with_output(CommandX::check_synth())
     }
 
     pub fn check_sat(&mut self) -> io::Result<SatResult> {
@@ -516,6 +543,20 @@ impl fmt::Display for FunDeclX {
                 write!(f, "{}", sort)?;
             } else {
                 write!(f, " {}", sort)?;
+            }
+        }
+        write!(f, ") {}", self.sort)
+    }
+}
+
+impl fmt::Display for SynthFunDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} (", self.name)?;
+        for (pos, var) in self.inputs.iter().enumerate() {
+            if pos == 0 {
+                write!(f, "({} {})", var.name, var.sort)?;
+            } else {
+                write!(f, " ({} {})", var.name, var.sort)?;
             }
         }
         write!(f, ") {}", self.sort)

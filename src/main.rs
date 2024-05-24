@@ -23,9 +23,13 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_perm_check: bool,
 
-    // Number of fractions
+    /// Number of fractions
     #[arg(long, default_value_t = 3)]
     num_fractions: u64,
+
+    /// Enable permission inference
+    #[arg(long, default_value_t = false)]
+    infer: bool,
 }
 
 fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
@@ -85,14 +89,20 @@ fn main() {
     let path = &args.source;
     let src = fs::read_to_string(path).expect("failed to read input file");
     let parsed = dfl::ProgramParser::new().parse(&src);
-    let mut solver = smt::Solver::new("z3", &["-in"]).expect("failed to create solver");
+    let mut solver = smt::Solver::new("./cvc5", &["--no-interactive", "--sygus", "--lang", "sygus2"]).expect("failed to create solver");
+
+    solver.set_logic("LIA").expect("failed to set logic");
 
     match parsed {
         Ok(program) => {
             let ctx = Ctx::from(&program).unwrap();
             // println!("{:?}", ctx);
             
-            match ctx.type_check(if args.no_perm_check { None } else { Some(&mut solver) }, args.num_fractions) {
+            match ctx.type_check(
+                if args.no_perm_check { None } else { Some(&mut solver) },
+                args.num_fractions,
+                args.infer,
+            ) {
                 Ok(()) => println!("type checked"),
                 Err(err) => {
                     let loc = match err.span {

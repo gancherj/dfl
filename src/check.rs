@@ -550,7 +550,12 @@ impl ProcX {
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(&self, mut solver_opt: Option<&mut smt::Solver>, num_fractions: u64) -> Result<(), Error> {
+    pub fn type_check(
+        &self,
+        mut solver_opt: Option<&mut smt::Solver>,
+        num_fractions: u64,
+        infer: bool, // Infer permission variables
+    ) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
         // Check mutable types are all non-reference types
@@ -573,6 +578,40 @@ impl Ctx {
                     vars: IndexMap::from([(Var::from(&decl.name), decl.typ.clone())]),
                 },
             )?;
+        }
+
+        let mut smt_ctx = EncodingCtx::new("perm");
+        let mut all_smt_constraints = Vec::new();
+
+        // Find the largest number of dimensions in any mutable
+        let max_dim = self.muts.values()
+            .map(|decl| decl.typ.get_dimensions()).max().unwrap_or(0);
+
+        let mut perm_interp = IndexMap::new();
+
+        for decl in self.perms.values() {
+            // Each permission variable is encoded as a relation
+            // R(x_1, ..., x_n, mut_idx: Int, i_1: Int, ..., i_m: Int, frac_idx: Int)
+            // where
+            // x_1, ..., x_n are dependent parameter types
+            // mut_idx is the mutable index
+            // i_1, ..., i_m are array indices
+            // frac_idx is the fraction index
+            let input_sorts =
+                decl.param_typs.iter()
+                    .map(|t| t.as_smt_sort())
+                    .chain([ Some(smt::Sort::Int) ])
+                    .chain((0..max_dim).map(|_| Some(smt::Sort::Int)))
+                    .chain([ Some(smt::Sort::Int) ])
+                    .filter_map(|x| x);
+            
+            let fresh_rel = smt_ctx.fresh_synth_fun(
+                format!("pv_{}", decl.name),
+                input_sorts.enumerate().map(|(i, sort)| (format!("x{}", i), sort)),
+                smt::Sort::Bool,
+            );
+
+            perm_interp.insert(decl.name.clone(), smt::TermX::var(fresh_rel));
         }
 
         // Check process types
@@ -623,55 +662,85 @@ impl Ctx {
             // TODO: better error handling
             if let Some(solver) = &mut solver_opt {
                 let mut smt_constraints = Vec::new();
-                let mut smt_ctx = EncodingCtx::new("perm");
 
-                println!("checking permissions for `{}`:", decl.name);
                 // Convert permission constraints to SMT constraints
+                println!("checking permissions for `{}`:", decl.name);
                 for constraint in &constraints {
                     smt_constraints.push(
-                        constraint
-                            .encode_invalidity(&mut smt_ctx, self, num_fractions)?,
+                        constraint.encode_validity(&mut smt_ctx, self, &perm_interp, num_fractions, infer)?,
                     );
                 }
 
-                solver.push().expect("failed to push");
+                if infer {
+                    // If we need to infer some global permission variables
+                    // we need to collect all constraints before checking
+                    all_smt_constraints.extend(smt_constraints);
+                    for constraint in &constraints {
+                        println!("  {}", constraint);
+                    }
+                } else {
+                    solver.push().expect("failed to push");
 
-                // Send context commands
-                for cmd in smt_ctx.to_commands() {
-                    solver.send_command(cmd).expect("failed to send command");
-                }
-
-                // Send assertions and check for validity
-                for (smt_constraint, constraint) in smt_constraints.iter().zip(constraints.iter()) {
-                    solver.assert(smt_constraint).expect("failed to assert");
-
-                    match solver.check_sat().unwrap() {
-                        smt::SatResult::Sat => {
-                            let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
-                            println!("  not valid: {}", constraint);
-                            println!("  encoding: {}", smt_constraint);
-                            print!("  model: {}", result);
-                            return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
-                        }
-                        smt::SatResult::Unsat => {
-                            println!("  valid: {}", constraint);
-                            println!("  encoding: {}", smt_constraint);
-                        }
-                        smt::SatResult::Unknown => {
-                            println!("  unknown: {}", constraint);
-                            return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
+                    // Send context commands
+                    for cmd in smt_ctx.to_commands() {
+                        solver.send_command(cmd).expect("failed to send command");
+                    }
+    
+                    // Assert each constraint and check for validity
+                    for (smt_constraint, constraint) in smt_constraints.iter().zip(constraints.iter()) {
+                        solver.assert(smt_constraint).expect("failed to assert");
+    
+                        match solver.check_sat().unwrap() {
+                            smt::SatResult::Sat => {
+                                let result = solver.send_command_with_output(smt::CommandX::get_model()).expect("failed to send command");
+                                println!("  not valid: {}", constraint);
+                                println!("  encoding: {}", smt_constraint);
+                                print!("  model: {}", result);
+                                return Error::spanned_err(decl.span, format!("permission constraints not valid for process `{}`", decl.name));
+                            }
+                            smt::SatResult::Unsat => {
+                                println!("  valid: {}", constraint);
+                                // println!("  encoding: {}", smt_constraint);
+                            }
+                            smt::SatResult::Unknown => {
+                                println!("  unknown: {}", constraint);
+                                return Error::spanned_err(decl.span, format!("failed to solve permission constraints for process `{}`", decl.name));
+                            }
                         }
                     }
+                    
+                    solver.pop().expect("failed to pop");
                 }
-
-                solver.pop().expect("failed to pop");
             } else {
                 println!("permission constraints for `{}`:", decl.name);
 
                 // No solver provided, we just print out permission constraints
-                for constraint in constraints {
+                for constraint in &constraints {
                     println!("  {}", constraint);
                 }
+            }
+        }
+
+        if infer {
+            if let Some(solver) = solver_opt {
+                println!("synthesizing permission variables");
+
+                // Send a dummy synth-fun to enable feasibility checking even when there is no
+                // permission variable
+                let empty_sorts: Vec<(&str, _)> = vec![];
+                solver.send_command(smt::CommandX::synth_fun("|_|", empty_sorts, smt::Sort::Bool))
+                    .expect("failed to send command");
+
+                for cmd in smt_ctx.to_commands() {
+                    solver.send_command(cmd).expect("failed to send command");
+                }
+
+                for smt_constraint in all_smt_constraints {
+                    solver.constraint(smt_constraint).expect("failed to add constraint");
+                }
+
+                let result = solver.check_synth().expect("failed to synthesize");
+                print!("result: {}", result);
             }
         }
 

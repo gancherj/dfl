@@ -1,0 +1,32 @@
+mut A: [int]
+
+perm P1(int)
+perm P2(int)
+perm P3(int)
+perm P4()
+perm P5()
+
+chan ld_index: int | P1(ld_index)
+
+chan st_value: int
+chan st_index: int | P2(st_index)
+
+proc Inc (i: int) | P3(i), out ld_index =
+    send i -> ld_index
+    Inc (i + 1)
+
+proc Ld | P4(), in ld_index, out st_value, out st_index =
+    recv i <- ld_index
+    read x <- A[i]
+    send x + 1 -> st_value
+    send i -> st_index
+    Ld
+
+proc St | P5(), in st_value, in st_index =
+    recv x <- st_value
+    recv i <- st_index
+    write x -> A[i]
+    St
+
+proc Program | all =
+    Inc 0 || Ld || St
