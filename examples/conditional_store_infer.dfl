@@ -33,9 +33,10 @@ proc Merge | in MergeDecider, in Merge1, in Merge2, out LdSync =
         Merge
     end
 
-proc Ld | in LdSync, out Steer1D, out Steer2D =
+proc Ld | in LdSync, out MergeDecider, out Steer1D, out Steer2D =
     recv _ <- LdSync
     read x <- A
+    send x -> MergeDecider
     send x -> Steer1D
     send x -> Steer2D
     Ld

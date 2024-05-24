@@ -473,10 +473,6 @@ impl PermConstraintX {
 
         num_fractions: u64,
     ) -> Result<smt::Term, Error> {
-        // For all mutable m, and for any indices i_1, ..., i_n of m
-        // for any 0 <= j < num_fractions
-        // Interpret each permission as a bool
-        
         match self {
             PermConstraintX::LessEq(p1, p2) => {
                 // Does there exists a mutable, a fraction index, and indices such that
