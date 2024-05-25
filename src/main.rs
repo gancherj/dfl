@@ -6,7 +6,7 @@ pub mod permission;
 pub mod smt;
 pub mod span;
 
-use crate::{ast::*, check::PermCheckMode};
+use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions};
 
 use clap::{command, Parser};
 use lalrpop_util::{lalrpop_mod, ParseError};
@@ -26,6 +26,18 @@ struct Args {
     /// Enable permission inference
     #[arg(long, default_value_t = false)]
     infer_perm: bool,
+
+    /// Enable array slices for permission inference
+    #[arg(long, default_value_t = false)]
+    array_slices: bool,
+
+    /// Enable if-then-else for permission inference
+    #[arg(long, default_value_t = false)]
+    use_ite: bool,
+
+    /// Number of fractions for permission inference
+    #[arg(long, default_value_t = 1)]
+    num_fractions: usize,
 
     /// Path to the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "z3")]
@@ -106,7 +118,11 @@ fn main() {
             } else if args.infer_perm {
                 let mut solver = smt::Solver::new(args.solver, &args.solver_opts).expect("failed to create solver");
                 solver.set_logic("LIA").expect("failed to set logic");
-                PermCheckMode::Infer(solver)
+                PermCheckMode::Infer(solver, PermInferOptions {
+                    array_slices: args.array_slices,
+                    use_ite: args.use_ite,
+                    num_fractions: args.num_fractions,
+                })
             } else {
                 PermCheckMode::None
             };

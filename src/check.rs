@@ -553,7 +553,7 @@ pub enum PermCheckMode {
     Check(smt::Solver),
 
     /// Infer permission variables using a synthesis solver
-    Infer(smt::Solver),
+    Infer(smt::Solver, PermInferOptions),
     
     /// Do not check permissions
     None,
@@ -652,8 +652,8 @@ impl Ctx {
             all_constraints.extend(constraints);
         }
 
-        if let PermCheckMode::Infer(solver) = mode {
-            match PermJudgment::infer_perm_var(all_constraints, self, solver)? {
+        if let PermCheckMode::Infer(solver, options) = mode {
+            match PermJudgment::infer_perm_var(all_constraints, options, self, solver)? {
                 Some(model) => {
                     println!("inferred permission variables: {}", model);
                 }

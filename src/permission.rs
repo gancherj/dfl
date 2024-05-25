@@ -243,61 +243,117 @@ impl PermissionX {
     }
 }
 
+pub struct PermInferOptions {
+    /// Enable array slices or not
+    pub array_slices: bool,
+
+    /// Enable ite in permissions
+    pub use_ite: bool,
+
+    /// How many fractions a write can split off
+    /// e.g. if num_fractions = 1, we get only one write token
+    /// if num_fractions = 2, write = read_1 + read_2
+    /// if num_fractions = 0, all permissions are false
+    pub num_fractions: usize,
+}
+
+impl PermInferOptions {
+    pub fn default() -> PermInferOptions {
+        PermInferOptions {
+            array_slices: false,
+            use_ite: false,
+            num_fractions: 0,
+        }
+    }
+}
+
 impl Interpretation {
     /// Generate a SyGuS grammar for a permission variable
-    fn generate_synthsis_grammar(ctx: &Ctx, perm_decl: &PermDecl) -> SynthFunGrammar {
+    fn generate_synthsis_grammar(options: &PermInferOptions, ctx: &Ctx, perm_decl: &PermDecl) -> SynthFunGrammar {
         let num_arr_idx = ctx.max_mut_dim();
             
         Rc::new(smt::SynthFunGrammarX {
             symbols: [
                 smt::NonTerminal::new("Start", smt::Sort::Bool, [
                     smt::TermX::var("StartAtom"),
-                    smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom")),
-                ]),
+                    smt::TermX::or([smt::TermX::var("StartAtom"), smt::TermX::var("Start")]),
+                ].into_iter().chain(
+                    if options.use_ite {
+                        vec![smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))]
+                    } else {
+                        vec![]
+                    }
+                )),
                 smt::NonTerminal::new("StartAtom", smt::Sort::Bool, [
-                    smt::TermX::or(
-                        ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
-                                [
-                                    // smt::TermX::var(format!("Mutable{}", i)),
-                                    smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-                                ]
-                                .into_iter()
-                                .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
-                                .chain([smt::TermX::var("Fraction")])
-                            ),
-                        )
+                    smt::TermX::and(
+                        [smt::TermX::var("Mutable")]
+                        .into_iter()
+                        .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
+                        .chain([smt::TermX::var("Fraction")])
                     ),
+
+                    // smt::TermX::or(
+                    //     ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
+                    //             [
+                    //                 smt::TermX::var("Mutable"),
+                    //                 // smt::TermX::var(format!("Mutable{}", i)),
+                    //                 // smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+                    //             ]
+                    //             .into_iter()
+                    //             .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
+                    //             .chain([smt::TermX::var("Fraction")])
+                    //         ),
+                    //     )
+                    // ),
                 ])
             ].into_iter()
-            // .chain(
-            //     ctx.muts.iter().enumerate().map(|(i, _)|
-            //         // Three restrict an array index:
-            //         // indexing (A[i]), slicing (A[i:] or A[i:j])
-            //         smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
-            //             smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-            //         ])
-            //     )
-            // )
+            .chain([
+                // ctx.muts.iter().enumerate().map(|(i, _)|
+                //     // Three restrict an array index:
+                //     // indexing (A[i]), slicing (A[i:] or A[i:j])
+                //     smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
+                //         smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+                //     ])
+                // )
+                smt::NonTerminal::new("Mutable", smt::Sort::Bool, ctx.muts.iter().enumerate().map(|(i, _)|
+                    smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))
+                ))
+            ])
             .chain(
                 (0..num_arr_idx).map(|i|
                     // Two restrict an array index: slicing (A[i:] or A[i:j])
-                    smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
-                        // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                        smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                        smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                    ])
+                    if options.array_slices {
+                        smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
+                            // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                            smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                            smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                        ])
+                    } else {
+                        // No restriction on array indices
+                        smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [ smt::TermX::bool(true) ])
+                    }
                 )
             )
             .chain([
-                smt::NonTerminal::new("Fraction", smt::Sort::Bool, [
-                    smt::TermX::bool(false),
-                    // TODO: allow read fractions
-                    smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
-                ]),
-                // smt::NonTerminal::new("RangeSize", smt::Sort::Int, [
-                //     // TODO: allow more range sizes?
-                //     smt::TermX::int(1),
-                // ]),
+                smt::NonTerminal::new("Fraction", smt::Sort::Bool,
+                    // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
+                    (0..options.num_fractions).map(|f|
+                        if f == options.num_fractions - 1 {
+                            smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+                        } else {
+                            smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+                        }
+                    ).chain(
+                        if options.num_fractions == 1 {
+                            vec![smt::TermX::bool(false)]
+                        } else {
+                            vec![
+                                smt::TermX::bool(false),
+                                smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+                            ]
+                        }
+                    )
+                ),
                 smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
                     smt::TermX::int(0),
                     smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
@@ -334,7 +390,7 @@ impl Interpretation {
 
     /// Initialize an interpretation using fresh variables to represent
     /// constants, permission variables, mutable index, etc.
-    fn new(smt_ctx: &mut EncodingCtx, ctx: &Ctx, sygus: bool) -> Interpretation {
+    fn new(smt_ctx: &mut EncodingCtx, options: &PermInferOptions, ctx: &Ctx, sygus: bool) -> Interpretation {
         let mut fresh_universal_var = |prefix, sort| if sygus {
             smt_ctx.fresh_var(prefix, sort)
         } else {
@@ -403,7 +459,7 @@ impl Interpretation {
                     format!("pv_{}", decl.name),
                     inputs,
                     smt::Sort::Bool,
-                    Some(&Interpretation::generate_synthsis_grammar(ctx, decl)),
+                    Some(&Interpretation::generate_synthsis_grammar(options, ctx, decl)),
                 );
     
                 interp.perms.insert(decl.name.clone(), smt::TermX::var(fresh_rel));
@@ -457,13 +513,14 @@ impl PermJudgment {
     /// as a SyGuS query and send it to an SMT solver to solve
     pub fn infer_perm_var(
         judgments: impl IntoIterator<Item=impl Into<PermJudgment>>,
+        options: &PermInferOptions,
         ctx: &Ctx,
         solver: &mut smt::Solver,
     ) -> Result<Option<smt::SynthModel>, Error> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut smt_constraints = Vec::new();
 
-        let mut interp = Interpretation::new(&mut smt_ctx, ctx, true);
+        let mut interp = Interpretation::new(&mut smt_ctx, options, ctx, true);
 
         for judgment in judgments {
             smt_constraints.push(judgment.into().encode_validity(&mut smt_ctx, ctx, &mut interp, true)?);
@@ -518,7 +575,7 @@ impl PermJudgment {
         solver: &mut smt::Solver,
     ) -> Result<bool, Error> {
         let mut smt_ctx = EncodingCtx::new("perm");
-        let mut interp = Interpretation::new(&mut smt_ctx, ctx, false);
+        let mut interp = Interpretation::new(&mut smt_ctx, &PermInferOptions::default(), ctx, false);
 
         let validity = self.encode_validity(&mut smt_ctx, ctx, &mut interp, false)?;
 
