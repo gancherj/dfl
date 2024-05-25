@@ -564,7 +564,6 @@ impl Ctx {
     pub fn type_check(
         &self,
         mode: &mut PermCheckMode,
-        num_fractions: u64,
     ) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
@@ -640,7 +639,7 @@ impl Ctx {
             println!("permission constraints for `{}`:", decl.name);
             for constraint in &constraints {
                 if let PermCheckMode::Check(solver) = mode {
-                    if constraint.check_validity(self, solver, num_fractions)? {
+                    if constraint.check_validity(self, solver)? {
                         println!("  valid: {}", constraint)
                     } else {
                         println!("  not valid: {}", constraint)
@@ -654,7 +653,7 @@ impl Ctx {
         }
 
         if let PermCheckMode::Infer(solver) = mode {
-            match PermJudgment::infer_perm_var(all_constraints, self, solver, num_fractions)? {
+            match PermJudgment::infer_perm_var(all_constraints, self, solver)? {
                 Some(model) => {
                     println!("inferred permission variables: {}", model);
                 }

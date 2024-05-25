@@ -47,7 +47,9 @@ rc_str_type!(PermVar, "{}");
 
 #[derive(Clone, Copy, Debug)]
 pub enum PermFraction {
-    Write,
+    /// Write(k) = sum of Read(k), Read(k + 1) ...
+    /// Write(0) = all permissions
+    Write(u32),
     Read(u32),
 }
 
@@ -285,7 +287,7 @@ impl Ctx {
                             // Add write permission to mut_name
                             new_res.push(Spanned::spanned_option(decl.span, ProcResourceX::Perm(
                                 Spanned::spanned_option(decl.span, PermissionX::Fraction(
-                                    PermFraction::Write,
+                                    PermFraction::Write(0),
                                     Spanned::spanned_option(decl.span, MutReferenceX::Base(mut_name.clone())),
                                 ),
                             ))));
@@ -1043,8 +1045,8 @@ impl fmt::Display for TermX {
 impl fmt::Display for PermFraction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PermFraction::Write => write!(f, "write"),
-            PermFraction::Read(k) => write!(f, "read_{}", k),
+            PermFraction::Write(k) => write!(f, "write({})", k),
+            PermFraction::Read(k) => write!(f, "read({})", k),
         }
     }
 }

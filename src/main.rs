@@ -34,10 +34,6 @@ struct Args {
     /// Options for the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "-in")]
     solver_opts: Vec<String>,
-
-    /// Number of fractions
-    #[arg(long, default_value_t = 3)]
-    num_fractions: u64,
 }
 
 fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
@@ -115,8 +111,8 @@ fn main() {
                 PermCheckMode::None
             };
             
-            match ctx.type_check(&mut mode, args.num_fractions) {
-                Ok(()) => println!("type checked"),
+            match ctx.type_check(&mut mode) {
+                Ok(()) => {},
                 Err(err) => {
                     let loc = match err.span {
                         Some(span) => {

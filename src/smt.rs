@@ -264,8 +264,16 @@ impl TermX {
         TermX::app("<", [a.borrow(), b.borrow()])
     }
 
-    pub fn lte(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+    pub fn le(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("<=", [a.borrow(), b.borrow()])
+    }
+
+    pub fn ge(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app(">=", [a.borrow(), b.borrow()])
+    }
+
+    pub fn gt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app(">", [a.borrow(), b.borrow()])
     }
     
     pub fn neg(a: impl Borrow<Term>) -> Term {
@@ -403,7 +411,7 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
-        // println!("[solver] {}", cmd.borrow());
+        // eprintln!("{}", cmd.borrow());
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 

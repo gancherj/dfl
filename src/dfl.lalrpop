@@ -63,7 +63,8 @@ ProcParam: ProcParam = {
 }
 
 PermFraction: PermFraction = {
-    "write" => PermFraction::Write,
+    "write" => PermFraction::Write(0),
+    "write" "(" <k:UnsignedInt> ")" => PermFraction::Write(k),
     "read" "(" <k:UnsignedInt> ")" => PermFraction::Read(k),
 }
 

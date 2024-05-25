@@ -168,7 +168,9 @@ impl PermissionX {
                 let mut conditions = Vec::new();
 
                 // If the fraction does not match, the permission is always empty
-                if let PermFraction::Read(k) = frac {
+                if let PermFraction::Write(k) = frac {
+                    conditions.push(smt::TermX::ge(frac_idx, smt::TermX::int(*k as u64)));
+                } else if let PermFraction::Read(k) = frac {
                     conditions.push(smt::TermX::eq(frac_idx, smt::TermX::int(*k as u64)));
                 }
 
@@ -213,7 +215,7 @@ impl PermissionX {
                         MutReferenceX::Slice(_, t1, t2) => {
                             // t1 <= idx
                             if let Some(t1) = t1 {
-                                conditions.push(smt::TermX::lte(TermX::as_smt_term(t1, interp)?, idx));
+                                conditions.push(smt::TermX::le(TermX::as_smt_term(t1, interp)?, idx));
                             }
 
                             // idx < t2
@@ -256,7 +258,6 @@ impl PermJudgment {
         judgments: impl IntoIterator<Item=impl Into<PermJudgment>>,
         ctx: &Ctx,
         solver: &mut smt::Solver,
-        num_fractions: u64,
     ) -> Result<Option<smt::SynthModel>, Error> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut smt_constraints = Vec::new();
@@ -289,7 +290,7 @@ impl PermJudgment {
         }
 
         for judgment in judgments {
-            smt_constraints.push(judgment.into().encode_validity(&mut smt_ctx, ctx, &perm_interp, num_fractions, true)?);
+            smt_constraints.push(judgment.into().encode_validity(&mut smt_ctx, ctx, &perm_interp, true)?);
         }
 
         // Send solver commands
@@ -329,10 +330,9 @@ impl PermJudgment {
         &self,
         ctx: &Ctx,
         solver: &mut smt::Solver,
-        num_fractions: u64,
     ) -> Result<bool, Error> {
         let mut smt_ctx = EncodingCtx::new("perm");
-        let smt_term = self.encode_validity(&mut smt_ctx, ctx, &IndexMap::new(), num_fractions, false)?;
+        let smt_term = self.encode_validity(&mut smt_ctx, ctx, &IndexMap::new(), false)?;
 
         // Send solver commands
         solver.push()
@@ -367,7 +367,6 @@ impl PermJudgment {
         smt_ctx: &mut EncodingCtx,
         ctx: &Ctx,
         perm_interp: &IndexMap<PermVar, smt::Term>,
-        num_fractions: u64,
         sygus: bool,
     ) -> Result<smt::Term, Error> {
         // In an SMT query, (negated) universal variables are skolemized as constants;
@@ -411,7 +410,7 @@ impl PermJudgment {
         
         // Bound arr_idx >= 0 (and maybe < length of the mutable too?)
         let indices_constraint: Vec<_> = indices.iter()
-            .map(|i| smt::TermX::lte(smt::TermX::int(0), i))
+            .map(|i| smt::TermX::le(smt::TermX::int(0), i))
             .collect();
 
         let validity = smt::TermX::implies(
@@ -423,17 +422,17 @@ impl PermJudgment {
                 ),
 
                 // 0 <= mut_idx < |ctx.muts|
-                smt::TermX::lte(smt::TermX::int(0), mut_idx),
+                smt::TermX::le(smt::TermX::int(0), mut_idx),
                 smt::TermX::lt(mut_idx, smt::TermX::int(ctx.muts.len() as u64)),
 
-                // 0 <= frac_idx < num_fractions
-                smt::TermX::lte(smt::TermX::int(0), frac_idx),
-                smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
+                // 0 <= frac_idx
+                smt::TermX::le(smt::TermX::int(0), frac_idx),
+                // smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
 
                 // Indices should be >= 0
                 smt::TermX::and(indices_constraint),
             ]),
-            self.perm_constraint.as_smt_term(smt_ctx, ctx, &interp, mut_idx, &indices, frac_idx, num_fractions)?,
+            self.perm_constraint.as_smt_term(smt_ctx, ctx, &interp, mut_idx, &indices, frac_idx)?,
         );
 
         if sygus {
@@ -470,8 +469,6 @@ impl PermConstraintX {
         mut_idx: &smt::Term,
         indices: &[smt::Term],
         frac_idx: &smt::Term,
-
-        num_fractions: u64,
     ) -> Result<smt::Term, Error> {
         match self {
             PermConstraintX::LessEq(p1, p2) => {
@@ -488,42 +485,41 @@ impl PermConstraintX {
                 // iff read(0) <= p \/ ... \/ read(k - 1) <= p
                 // iff exists frac_idx. read(frac_idx) <= p
 
-                let mut conditions = Vec::new();
+                // let mut conditions = Vec::new();
 
-                for k in 0..num_fractions {
-                    conditions.push(Rc::new(PermConstraintX::LessEq(
-                        Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
-                        p.clone(),
-                    )).as_smt_term(smt_ctx, ctx, interp, &mut_idx, &indices, &frac_idx, num_fractions)?);
-                }
+                // for k in 0..num_fractions {
+                //     conditions.push(Rc::new(PermConstraintX::LessEq(
+                //         Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
+                //         p.clone(),
+                //     )).as_smt_term(smt_ctx, ctx, interp, &mut_idx, &indices, &frac_idx, num_fractions)?);
+                // }
 
-                Ok(smt::TermX::and(conditions))
+                // Ok(smt::TermX::and(conditions))
                 
-                // let frac_idx_name = &smt_ctx.fresh_ident("frac_idx");
-                // let frac_idx = &smt::TermX::var(frac_idx_name);
+                let frac_idx_name = &smt_ctx.fresh_ident("frac_idx");
+                let frac_idx = &smt::TermX::var(frac_idx_name);
 
-                // Ok(smt::TermX::forall(
-                //     [(frac_idx_name, smt::Sort::Int)],
-                //     smt::TermX::implies(
-                //         smt::TermX::and([
-                //         // 0 <= frac_idx < num_fractions
-                //             smt::TermX::lte(smt::TermX::int(0), frac_idx),
-                //             smt::TermX::lt(frac_idx, smt::TermX::int(num_fractions)),
-                //         ]),
+                Ok(smt::TermX::forall(
+                    [(frac_idx_name, smt::Sort::Int)],
+                    smt::TermX::implies(
+                        smt::TermX::and([
+                            // 0 <= frac_idx < num_fractions
+                            smt::TermX::ge(frac_idx, smt::TermX::int(0)),
+                        ]),
 
-                //         Rc::new(PermConstraintX::LessEq(
-                //             // NOTE: using ::Write here is intensional
-                //             Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
-                //             p.clone(),
-                //         )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx, num_fractions)?,
-                //     ),
-                // ))
+                        Rc::new(PermConstraintX::LessEq(
+                            // NOTE: using ::Write here is intensional
+                            Spanned::new(PermissionX::Fraction(PermFraction::Write(0), mut_ref.clone())),
+                            p.clone(),
+                        )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx)?,
+                    ),
+                ))
             }
             PermConstraintX::HasWrite(mut_ref, p) =>
                 Rc::new(PermConstraintX::LessEq(
-                    Spanned::new(PermissionX::Fraction(PermFraction::Write, mut_ref.clone())),
+                    Spanned::new(PermissionX::Fraction(PermFraction::Write(0), mut_ref.clone())),
                     p.clone(),
-                )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx, num_fractions),
+                )).as_smt_term(smt_ctx, ctx, interp, mut_idx, indices, frac_idx),
         }
     }
 }
