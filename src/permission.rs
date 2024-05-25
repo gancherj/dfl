@@ -280,10 +280,9 @@ impl Interpretation {
             // )
             .chain(
                 (0..num_arr_idx).map(|i|
-                    // Three restrict an array index:
-                    // indexing (A[i]), slicing (A[i:] or A[i:j])
+                    // Two restrict an array index: slicing (A[i:] or A[i:j])
                     smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
-                        smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                        // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
                         smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
                         smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
                     ])
@@ -294,6 +293,14 @@ impl Interpretation {
                     smt::TermX::bool(false),
                     // TODO: allow read fractions
                     smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+                ]),
+                // smt::NonTerminal::new("RangeSize", smt::Sort::Int, [
+                //     // TODO: allow more range sizes?
+                //     smt::TermX::int(1),
+                // ]),
+                smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
+                    smt::TermX::int(0),
+                    smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
                 ]),
                 smt::NonTerminal::new("TermInt", smt::Sort::Int,
                     // Only add dependent variables of type int
@@ -315,8 +322,9 @@ impl Interpretation {
                             _ => None,
                         }
                     ).chain([
-                        smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("TermInt")),
-                        smt::TermX::not(smt::TermX::var("TermBool")),
+                        smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
+                        // no need for not since we can just reorder ite branches
+                        // smt::TermX::not(smt::TermX::var("TermBool")),
                     ]),
                 ),
             ]).collect(),

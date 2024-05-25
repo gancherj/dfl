@@ -57,8 +57,7 @@ proc Steer1 | in C3, in C4, out C5, out C8, out C9 =
 
 proc Add2 | in C5, in C6, out C2 =
   recv a <- C5
-  recv b <- C6
-  send a + b -> C2
+  send a + 1 -> C2
   Add2
 
 proc Store3 | in C7, in C8, in C9 =
