@@ -82,6 +82,7 @@ pub enum CommandX {
     // Some commands for SyGuS
     SynthFun(SynthFunDecl),
     DeclareVar(VarDecl),
+    Assume(Term),
     Constraint(Term),
     CheckSynth,
 }
@@ -356,6 +357,10 @@ impl CommandX {
         Rc::new(CommandX::Assert(term.borrow().clone()))
     }
 
+    pub fn assume(term: impl Borrow<Term>) -> Command {
+        Rc::new(CommandX::Assume(term.borrow().clone()))
+    }
+
     pub fn constraint(term: impl Borrow<Term>) -> Command {
         Rc::new(CommandX::Constraint(term.borrow().clone()))
     }
@@ -460,6 +465,10 @@ impl Solver {
 
     pub fn assert(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
         self.send_command(CommandX::assert(term))
+    }
+
+    pub fn assume(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
+        self.send_command(CommandX::assume(term))
     }
 
     pub fn constraint(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
@@ -601,6 +610,7 @@ impl fmt::Display for CommandX {
             CommandX::SetLogic(logic) => write!(f, "(set-logic {})", logic),
             CommandX::DeclareVar(decl) => write!(f, "(declare-var {})", decl),
             CommandX::SynthFun(decl) => write!(f, "(synth-fun {})", decl),
+            CommandX::Assume(t) => write!(f, "(assume {})", t),
             CommandX::Constraint(t) => write!(f, "(constraint {})", t),
             CommandX::CheckSynth => write!(f, "(check-synth)"),
         }
