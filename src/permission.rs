@@ -13,7 +13,7 @@ use std::rc::Rc;
 use im::Vector;
 use indexmap::IndexMap;
 
-use crate::{ast::*, check::LocalCtx, smt::{self, EncodingCtx}, span::{Error, Spanned}};
+use crate::{ast::*, check::LocalCtx, smt::{self, EncodingCtx, SynthFunGrammar}, span::{Error, Spanned}};
 
 pub type PermConstraint = Rc<PermConstraintX>;
 #[derive(Debug)]
@@ -244,6 +244,86 @@ impl PermissionX {
 }
 
 impl Interpretation {
+    /// Generate a SyGuS grammar for a permission variable
+    fn generate_synthsis_grammar(ctx: &Ctx, perm_decl: &PermDecl) -> SynthFunGrammar {
+        let num_arr_idx = ctx.max_mut_dim();
+            
+        Rc::new(smt::SynthFunGrammarX {
+            symbols: [
+                smt::NonTerminal::new("Start", smt::Sort::Bool, [
+                    smt::TermX::var("StartAtom"),
+                    smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom")),
+                ]),
+                smt::NonTerminal::new("StartAtom", smt::Sort::Bool, [
+                    smt::TermX::or(
+                        ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
+                                [
+                                    // smt::TermX::var(format!("Mutable{}", i)),
+                                    smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+                                ]
+                                .into_iter()
+                                .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
+                                .chain([smt::TermX::var("Fraction")])
+                            ),
+                        )
+                    ),
+                ])
+            ].into_iter()
+            // .chain(
+            //     ctx.muts.iter().enumerate().map(|(i, _)|
+            //         // Three restrict an array index:
+            //         // indexing (A[i]), slicing (A[i:] or A[i:j])
+            //         smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
+            //             smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+            //         ])
+            //     )
+            // )
+            .chain(
+                (0..num_arr_idx).map(|i|
+                    // Three restrict an array index:
+                    // indexing (A[i]), slicing (A[i:] or A[i:j])
+                    smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
+                        smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                        smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                        smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+                    ])
+                )
+            )
+            .chain([
+                smt::NonTerminal::new("Fraction", smt::Sort::Bool, [
+                    smt::TermX::bool(false),
+                    // TODO: allow read fractions
+                    smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+                ]),
+                smt::NonTerminal::new("TermInt", smt::Sort::Int,
+                    // Only add dependent variables of type int
+                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+                        match typ {
+                            BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
+                            _ => None,
+                        }
+                    ).chain([
+                        smt::TermX::int(0),
+                        smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
+                    ]),
+                ),
+                smt::NonTerminal::new("TermBool", smt::Sort::Bool,
+                    // Only add dependent variables of type bool
+                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+                        match typ {
+                            BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
+                            _ => None,
+                        }
+                    ).chain([
+                        smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("TermInt")),
+                        smt::TermX::not(smt::TermX::var("TermBool")),
+                    ]),
+                ),
+            ]).collect(),
+        })
+    }
+ 
+
     /// Initialize an interpretation using fresh variables to represent
     /// constants, permission variables, mutable index, etc.
     fn new(smt_ctx: &mut EncodingCtx, ctx: &Ctx, sygus: bool) -> Interpretation {
@@ -311,7 +391,12 @@ impl Interpretation {
                         .chain((0..max_dim).map(|i| (format!("arr_idx{}", i), smt::Sort::Int)))
                         .chain([ ("frac_idx".to_string(), smt::Sort::Int) ]);
                 
-                let fresh_rel = smt_ctx.fresh_synth_fun(format!("pv_{}", decl.name), inputs, smt::Sort::Bool);
+                let fresh_rel = smt_ctx.fresh_synth_fun(
+                    format!("pv_{}", decl.name),
+                    inputs,
+                    smt::Sort::Bool,
+                    Some(&Interpretation::generate_synthsis_grammar(ctx, decl)),
+                );
     
                 interp.perms.insert(decl.name.clone(), smt::TermX::var(fresh_rel));
             }
@@ -322,6 +407,44 @@ impl Interpretation {
 }
 
 impl PermJudgment {
+    fn generate_sygus_prelude() -> Vec<smt::Command> {
+        vec![
+            smt::CommandX::define_fun(
+                "arr_index",
+                [("i", smt::Sort::Int), ("arr_idx", smt::Sort::Int)],
+                smt::Sort::Bool,
+                smt::TermX::eq(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
+            ),
+            smt::CommandX::define_fun(
+                "arr_from",
+                [("i", smt::Sort::Int), ("arr_idx", smt::Sort::Int)],
+                smt::Sort::Bool,
+                smt::TermX::le(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
+            ),
+            smt::CommandX::define_fun(
+                "arr_range",
+                [("i", smt::Sort::Int), ("j", smt::Sort::Int), ("arr_idx", smt::Sort::Int)],
+                smt::Sort::Bool,
+                smt::TermX::and([
+                    smt::TermX::le(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
+                    smt::TermX::gt(smt::TermX::var("j"), smt::TermX::var("arr_idx")),
+                ]),
+            ),
+            smt::CommandX::define_fun(
+                "frac_read",
+                [("f", smt::Sort::Int), ("frac_idx", smt::Sort::Int)],
+                smt::Sort::Bool,
+                smt::TermX::eq(smt::TermX::var("f"), smt::TermX::var("frac_idx")),
+            ),
+            smt::CommandX::define_fun(
+                "frac_write",
+                [("f", smt::Sort::Int), ("frac_idx", smt::Sort::Int)],
+                smt::Sort::Bool,
+                smt::TermX::le(smt::TermX::var("f"), smt::TermX::var("frac_idx")),
+            ),
+        ]
+    }
+
     /// Encode a list of judgments over permission variables
     /// as a SyGuS query and send it to an SMT solver to solve
     pub fn infer_perm_var(
@@ -345,8 +468,13 @@ impl PermJudgment {
         // Send a dummy synth-fun to enable feasibility checking even when there is no
         // permission variable
         let empty_sorts: Vec<(&str, _)> = vec![];
-        solver.send_command(smt::CommandX::synth_fun("dummy", empty_sorts, smt::Sort::Bool))
+        solver.send_command(smt::CommandX::synth_fun("dummy", empty_sorts, smt::Sort::Bool, None))
             .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+
+        for cmd in PermJudgment::generate_sygus_prelude() {
+            solver.send_command(cmd)
+                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+        }
 
         for cmd in smt_ctx.to_commands() {
             solver.send_command(cmd)

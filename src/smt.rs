@@ -57,12 +57,45 @@ pub struct FunDeclX {
     pub sort: Sort,
 }
 
+pub type FunDefn = Rc<FunDefnX>;
+#[derive(Debug)]
+pub struct FunDefnX {
+    pub name: Ident,
+    pub inputs: Vec<SortedVar>,
+    pub sort: Sort,
+    pub body: Term,
+}
+
+#[derive(Debug)]
+pub struct NonTerminal {
+    pub name: Ident,
+    pub sort: Sort,
+    pub rules: Vec<Term>,
+}
+
+impl NonTerminal {
+    pub fn new(name: impl Into<Ident>, sort: Sort, rules: impl IntoIterator<Item=impl Borrow<Term>>) -> NonTerminal {
+        NonTerminal {
+            name: name.into(),
+            sort: sort,
+            rules: rules.into_iter().map(|r| r.borrow().clone()).collect(),
+        }
+    }
+}
+
+pub type SynthFunGrammar = Rc<SynthFunGrammarX>;
+#[derive(Debug)]
+pub struct SynthFunGrammarX {
+    pub symbols: Vec<NonTerminal>,
+}
+
 pub type SynthFunDecl = Rc<SynthFunDeclX>;
 #[derive(Debug)]
 pub struct SynthFunDeclX {
     pub name: Ident,
     pub inputs: Vec<SortedVar>,
     pub sort: Sort,
+    pub grammar: Option<SynthFunGrammar>,
 }
 
 pub type Command = Rc<CommandX>;
@@ -72,6 +105,7 @@ pub enum CommandX {
     Pop,
     DeclareConst(VarDecl),
     DeclareFun(FunDecl),
+    DefineFun(FunDefn),
     Assert(Term),
     CheckSat,
     GetModel,
@@ -164,9 +198,10 @@ impl EncodingCtx {
         prefix: impl AsRef<str>,
         inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>,
         sort: Sort,
+        grammar: Option<&SynthFunGrammar>,
     ) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.commands.push(CommandX::synth_fun(&name, inputs, sort));
+        self.commands.push(CommandX::synth_fun(&name, inputs, sort, grammar));
         name
     }
 
@@ -343,13 +378,25 @@ impl CommandX {
         Rc::new(CommandX::DeclareFun(Rc::new(FunDeclX { name: id.into(), inputs: inputs.into_iter().collect(), sort: sort })))
     }
 
-    pub fn synth_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, sort: Sort) -> Command {
+    pub fn define_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, sort: Sort, body: impl Borrow<Term>) -> Command {
+        Rc::new(CommandX::DefineFun(Rc::new(FunDefnX {
+            name: id.into(),
+            inputs: inputs.into_iter()
+                .map(|(i, s)| SortedVar { name: i.into(), sort: s })
+                .collect(),
+            sort: sort,
+            body: body.borrow().clone(),
+        })))
+    }
+
+    pub fn synth_fun(id: impl Into<Ident>, inputs: impl IntoIterator<Item=(impl Into<Ident>, Sort)>, sort: Sort, grammar: Option<&SynthFunGrammar>) -> Command {
         Rc::new(CommandX::SynthFun(Rc::new(SynthFunDeclX {
             name: id.into(),
             inputs: inputs.into_iter()
                 .map(|(v, s)| SortedVar { name: v.into(), sort: s })
                 .collect(),
             sort: sort,
+            grammar: grammar.map(|g| g.clone()),
         })))
     }
 
@@ -416,7 +463,7 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
-        // eprintln!("{}", cmd.borrow());
+        eprintln!("{}", cmd.borrow());
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 
@@ -581,6 +628,57 @@ impl fmt::Display for FunDeclX {
     }
 }
 
+impl fmt::Display for FunDefnX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} (", self.name)?;
+        for (pos, var) in self.inputs.iter().enumerate() {
+            if pos == 0 {
+                write!(f, "{}", var)?;
+            } else {
+                write!(f, " {}", var)?;
+            }
+        }
+        write!(f, ") {}", self.sort)?;
+        write!(f, " {}", self.body)
+    }
+}
+
+impl fmt::Display for SynthFunGrammarX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(")?;
+
+        for (i, symbol) in self.symbols.iter().enumerate() {
+            if i == 0 {
+                write!(f, "({} {})", symbol.name, symbol.sort)?;
+            } else {
+                write!(f, " ({} {})", symbol.name, symbol.sort)?;
+            }
+        }
+
+        write!(f, ") (")?;
+
+        for (i, symbol) in self.symbols.iter().enumerate() {
+            if i == 0 {
+                write!(f, "({} {} (", symbol.name, symbol.sort)?;
+            } else {
+                write!(f, " ({} {} (", symbol.name, symbol.sort)?;
+            }
+
+            for (j, rule) in symbol.rules.iter().enumerate() {
+                if j == 0 {
+                    write!(f, "{}", rule)?;
+                } else {
+                    write!(f, " {}", rule)?;
+                }
+            }
+
+            write!(f, "))")?;
+        }
+
+        write!(f, ")")
+    }
+}
+
 impl fmt::Display for SynthFunDeclX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} (", self.name)?;
@@ -591,7 +689,13 @@ impl fmt::Display for SynthFunDeclX {
                 write!(f, " ({} {})", var.name, var.sort)?;
             }
         }
-        write!(f, ") {}", self.sort)
+        write!(f, ") {}", self.sort)?;
+
+        if let Some(grammar) = &self.grammar {
+            write!(f, " {}", grammar)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -602,6 +706,7 @@ impl fmt::Display for CommandX {
             CommandX::Pop => write!(f, "(pop)"),
             CommandX::DeclareConst(decl) => write!(f, "(declare-const {})", decl),
             CommandX::DeclareFun(decl) => write!(f, "(declare-fun {})", decl),
+            CommandX::DefineFun(defn) => write!(f, "(define-fun {})", defn),
             CommandX::Assert(t) => write!(f, "(assert {})", t),
             CommandX::CheckSat => write!(f, "(check-sat)"),
             CommandX::GetModel => write!(f, "(get-model)"),
