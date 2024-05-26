@@ -1,0 +1,25 @@
+mut A: [int]
+mut B: int
+mut C: [[int]]
+
+chan C1: &A[1..*]
+chan C2: &A[*..*]
+chan C3: &{A[*..*][2], B}
+
+proc test1 | out C1, out C2, out C3 =
+    send &A[1..5] -> C1
+    send &A[2..4] -> C2
+    send &A[2..4][2] -> C3
+
+proc test2 | write A[3], in C1 =
+    recv r <- C1
+    write 0 -> *r[2]
+
+proc test3 | write A, write B, in C3 =
+    recv r <- C3
+    write 0 -> *r
+
+perm P()
+proc test4 | P(), in C3 =
+    recv r <- C3
+    write 0 -> *r

@@ -734,7 +734,7 @@ impl fmt::Display for PermConstraintX {
             PermConstraintX::Disjoint(perms) =>
                 write!(f, "disjoint({})", perms.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")),
             PermConstraintX::HasRead(m, p) => write!(f, "read(*) {} <= {}", m, p),
-            PermConstraintX::HasWrite(m, p) => write!(f, "write {} <= {}", m, p),
+            PermConstraintX::HasWrite(m, p) => write!(f, "write(0) {} <= {}", m, p),
         }
     }
 }

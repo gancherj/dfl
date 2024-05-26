@@ -592,8 +592,8 @@ impl MutReferenceX {
     /// Check if the mutable reference has a deref or not
     pub fn has_deref(&self) -> bool {
         match self {
-            MutReferenceX::Base(..) => true,
-            MutReferenceX::Deref(..) => false,
+            MutReferenceX::Base(..) => false,
+            MutReferenceX::Deref(..) => true,
             MutReferenceX::Index(m, ..) => m.has_deref(),
             MutReferenceX::Slice(m, ..) => m.has_deref(),
         }

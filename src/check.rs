@@ -45,49 +45,10 @@ impl fmt::Display for LocalCtx {
 }
 
 impl BaseType {
-    // pub fn is_ref(&self) -> bool {
-    //     match self {
-    //         BaseType::Bool => false,
-    //         BaseType::Int => false,
-    //         BaseType::Ref(..) => true,
-    //     }
-    // }
-
     /// Checks if self <= other in subtyping
     pub fn is_subtype(&self, other: &BaseType) -> bool {
         self == other
     }
-
-    // // Try to get the base type of a reference type
-    // pub fn get_ref_type(&self, ctx: &Ctx) -> Result<MutType, String> {
-    //     match self {
-    //         BaseType::Bool => Err(format!("bool cannot be deferenced")),
-    //         BaseType::Int => Err(format!("bool cannot be deferenced")),
-    //         BaseType::Ref(ns, level) => {
-    //             let ref_types = ns
-    //                 .iter()
-    //                 .map(|n|
-    //                     Ok::<MutType, String>(ctx.muts
-    //                         .get(n)
-    //                         .ok_or(format!("mutable `{}` not defined", n))?.typ.clone()
-    //                     ))
-    //                 .collect::<Result<Vec<_>, _>>()?
-    //                 .into_iter()
-    //                 .collect::<IndexSet<_>>();
-
-    //             if ref_types.len() != 1 {
-    //                 return Err(format!(
-    //                     "reference to mutable(s) with inconsistent types {}",
-    //                     ref_types.iter().map(|t| t.to_string()).collect::<String>(),
-    //                 ));
-    //             }
-
-    //             let mut_type = ref_types.first().unwrap();
-    //             MutTypeX::get_deref_type(mut_type, *level)
-    //                 .ok_or(format!("mutable type {} cannot be dereferenced {} time(s)", mut_type, level))
-    //         }
-    //     }
-    // }
 
     pub fn type_check(&self, _ctx: &Ctx) -> Result<(), String> {
         // Just a placeholder in case we need more base types
@@ -101,6 +62,14 @@ impl MutReferenceIndex {
         match &term.x {
             TermX::Int(i) => MutReferenceIndex::Const(*i),
             _ => MutReferenceIndex::Unknown,
+        }
+    }
+
+    // i <= * for any i: int
+    pub fn is_subsumed_by(&self, other: &MutReferenceIndex) -> bool {
+        match other {
+            MutReferenceIndex::Const(..) => self == other,
+            MutReferenceIndex::Unknown => true,
         }
     }
 }
@@ -129,6 +98,35 @@ impl MutReferenceTypeX {
                     MutTypeX::Array(..) => Ok(typ.clone()),
                 }
             }
+        }
+    }
+
+    /// Check if self is a subtype of other
+    /// e.g.
+    /// A[1..] <= A[*..]
+    /// A[1..3] <= A[*..*]
+    /// 
+    /// However, for simplicity, we currently do not
+    /// consider subtypings like A[1..][1..] <= A[2..]
+    /// i.e. both references need to be of the same "shape"
+    pub fn is_subtype(&self, other: &MutReferenceType) -> bool {
+        match (self, &other.borrow()) {
+            (MutReferenceTypeX::Base(n1), MutReferenceTypeX::Base(n2)) => n1 == n2,
+            (MutReferenceTypeX::Index(m1, i1), MutReferenceTypeX::Index(m2, i2)) =>
+                m1.is_subtype(m2) && i1.is_subsumed_by(i2),
+            (MutReferenceTypeX::Slice(m1, i1, j1), MutReferenceTypeX::Slice(m2, i2, j2)) =>
+                m1.is_subtype(m2) &&
+                match (i1, i2) {
+                    (None, None) => true,
+                    (Some(i1), Some(i2)) => i1.is_subsumed_by(i2),
+                    _ => false,
+                } &&
+                match (j1, j2) {
+                    (None, None) => true,
+                    (Some(j1), Some(j2)) => j1.is_subsumed_by(j2),
+                    _ => false,
+                },
+            _ => false,
         }
     }
 
@@ -175,7 +173,9 @@ impl TermTypeX {
                 }
             TermTypeX::Ref(refs1) =>
                 if let TermTypeX::Ref(refs2) = other {
-                    refs1.iter().collect::<IndexSet<_>>().is_subset(&refs2.iter().collect::<IndexSet<_>>())
+                    // Each type in refs1 is a subtype of some type in ref2
+                    refs1.iter().all(|ref_typ1|
+                        refs2.iter().any(|ref_typ2| ref_typ1.is_subtype(ref_typ2)))
                 } else {
                     false
                 }
@@ -204,8 +204,8 @@ impl TermTypeX {
 
                 if mut_typs.len() != 1 {
                     return Err(format!(
-                        "reference to mutable(s) with inconsistent types {}",
-                        mut_typs.iter().map(|t| t.to_string()).collect::<String>(),
+                        "reference to mutable(s) with inconsistent types {{ {} }}",
+                        mut_typs.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "),
                     ));
                 }
                 
