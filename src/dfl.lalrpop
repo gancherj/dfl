@@ -47,10 +47,10 @@ BaseType: BaseType = {
     "int" => BaseType::Int,
 }
 
-BaseTypeWithRef: BaseType = {
-    BaseType,
-    "&" <n:MutName> <l:("[""*""]")*> => BaseType::Ref(Rc::new([n]), l.len()),
-    "&" "{" <ns:CommaSep<MutName>> "}" <l:("[""*""]")*> => BaseType::Ref(ns.into(), l.len()),
+TermType: TermType = {
+    BaseType => Rc::new(TermTypeX::Base(<>)),
+    "&" <t:MutReferenceType> => Rc::new(TermTypeX::Ref(vec![t])),
+    "&" "{" <ts:CommaSep<MutReferenceType>> "}" => Rc::new(TermTypeX::Ref(ts)),
 }
 
 MutType: MutType = {
@@ -59,7 +59,7 @@ MutType: MutType = {
 }
 
 ProcParam: ProcParam = {
-    "(" <v:Var> ":" <t:BaseTypeWithRef> ")" => ProcParam { name: v, typ: t },
+    "(" <v:Var> ":" <t:TermType> ")" => ProcParam { name: v, typ: t },
 }
 
 PermFraction: PermFraction = {
@@ -68,11 +68,22 @@ PermFraction: PermFraction = {
     "read" "(" <k:UnsignedInt> ")" => PermFraction::Read(k),
 }
 
+MutReferenceIndex: MutReferenceIndex = {
+    "*" => MutReferenceIndex::Unknown,
+    UnsignedInt => MutReferenceIndex::Const(<> as i64),
+}
+
+MutReferenceType: MutReferenceType = {
+    <name:MutName> => Rc::new(MutReferenceTypeX::Base(name)),
+    <m:MutReferenceType> "[" <i:MutReferenceIndex> "]" => Rc::new(MutReferenceTypeX::Index(m, i)),
+    <m:MutReferenceType> "[" <i1:MutReferenceIndex?> ".." <i2:MutReferenceIndex?> "]" => Rc::new(MutReferenceTypeX::Slice(m, i1, i2)),
+}
+
 MutReference: MutReference = {
     <start:@L> <name:MutName> <end:@R> => Spanned::spanned(start, end, MutReferenceX::Base(name)),
     <start:@L> "*" <t:AtomicTerm> <end:@R> => Spanned::spanned(start, end, MutReferenceX::Deref(t)),
-    <start:@L> <m:MutReference> "[" <t:Term> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Index(m, t)),
-    <start:@L> <m:MutReference> "[" <t1:Term?> ".." <t2:Term?> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Slice(m, t1, t2)),
+    <start:@L> <m:MutReference> "[" <i:Term> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Index(m, i)),
+    <start:@L> <m:MutReference> "[" <i1:Term?> ".." <i2:Term?> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Slice(m, i1, i2)),
 }
 
 PermissionReset = <Permission>;
@@ -151,12 +162,12 @@ ProcResource: ProcResource = {
 }
 
 Decl: Decl = {
-    <start:@L> "const" <n:Const> ":" <t:BaseTypeWithRef> <end:@R> => Decl::Const(Spanned::spanned(start, end, ConstDeclX { name: n, typ: t })),
+    <start:@L> "const" <n:Const> ":" <t:BaseType> <end:@R> => Decl::Const(Spanned::spanned(start, end, ConstDeclX { name: n, typ: t })),
     <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => Decl::Perm(Spanned::spanned(start, end, PermDeclX { name: v, param_typs: p })),
     <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => Decl::Mut(Spanned::spanned(start, end, MutDeclX { name: n, typ: t })),
-    <start:@L> "chan" <n:ChanName> ":" <t:BaseTypeWithRef> "|" <p:Permission> <end:@R> =>
+    <start:@L> "chan" <n:ChanName> ":" <t:TermType> "|" <p:Permission> <end:@R> =>
         Decl::Chan(Spanned::spanned(start, end, ChanDeclX { name: n, typ: t, perm: p })),
-    <start:@L> "chan" <n:ChanName> ":" <t:BaseTypeWithRef> <end:@R> =>
+    <start:@L> "chan" <n:ChanName> ":" <t:TermType> <end:@R> =>
         Decl::Chan(Spanned::spanned(start, end, ChanDeclX { name: n, typ: t, perm: Spanned::spanned(end, end, PermissionX::Empty) })),
     <start:@L> "proc" <n:ProcName> <p:CommaSep<ProcParam>> "|" <r:CommaSep<ProcResource>> <end:@R> "=" <b:Proc> =>
         Decl::Proc(Spanned::spanned(start, end, ProcDeclX { name: n, params: p, res: r, all_res: false, body: b })),

@@ -463,7 +463,7 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
-        eprintln!("{}", cmd.borrow());
+        // eprintln!("{}", cmd.borrow());
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 

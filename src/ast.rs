@@ -53,6 +53,20 @@ pub enum PermFraction {
     Read(u32),
 }
 
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum MutReferenceIndex {
+    Const(i64),
+    Unknown,
+}
+
+pub type MutReferenceType = Rc<MutReferenceTypeX>;
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum MutReferenceTypeX {
+    Base(MutName),
+    Index(MutReferenceType, MutReferenceIndex),
+    Slice(MutReferenceType, Option<MutReferenceIndex>, Option<MutReferenceIndex>),
+}
+
 pub type MutReference = RcSpanned<MutReferenceX>;
 #[derive(Debug)]
 pub enum MutReferenceX {
@@ -77,7 +91,13 @@ pub enum PermissionX {
 pub enum BaseType {
     Bool,
     Int,
-    Ref(Rc<[MutName]>, usize),
+}
+
+pub type TermType = Rc<TermTypeX>;
+#[derive(Eq, PartialEq, Debug)]
+pub enum TermTypeX {
+    Base(BaseType),
+    Ref(Vec<MutReferenceType>),
 }
 
 pub type MutType = Rc<MutTypeX>;
@@ -145,14 +165,14 @@ pub type ChanDecl = RcSpanned<ChanDeclX>;
 #[derive(Debug)]
 pub struct ChanDeclX {
     pub name: ChanName,
-    pub typ: BaseType,
+    pub typ: TermType,
     pub perm: Permission,
 }
 
 #[derive(Clone, Debug)]
 pub struct ProcParam {
     pub name: Var,
-    pub typ: BaseType,
+    pub typ: TermType,
 }
 
 pub type ProcResource = RcSpanned<ProcResourceX>;
@@ -335,9 +355,48 @@ impl Ctx {
     }
 }
 
+impl TermTypeX {
+    pub fn is_int(&self) -> bool {
+        match self {
+            TermTypeX::Base(BaseType::Int) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_bool(&self) -> bool {
+        match self {
+            TermTypeX::Base(BaseType::Bool) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_ref(&self) -> bool {
+        match self {
+            TermTypeX::Ref(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn base(typ: &BaseType) -> TermType {
+        Rc::new(TermTypeX::Base(typ.clone()))
+    }
+
+    pub fn int() -> TermType {
+        Rc::new(TermTypeX::Base(BaseType::Int))
+    }
+
+    pub fn bool() -> TermType {
+        Rc::new(TermTypeX::Base(BaseType::Bool))
+    }
+}
+
 impl TermX {
     pub fn var(v: impl Into<Var>) -> Term {
         Spanned::new(TermX::Var(v.into()))
+    }
+
+    pub fn int(i: i64) -> Term {
+        Spanned::new(TermX::Int(i))
     }
 
     pub fn constant(c: impl Into<Const>) -> Term {
@@ -530,15 +589,25 @@ impl MutTypeX {
 }
 
 impl MutReferenceX {
-    /// Check if the base type is a direct reference instead of a deref
-    pub fn is_simple(&self) -> bool {
+    /// Check if the mutable reference has a deref or not
+    pub fn has_deref(&self) -> bool {
         match self {
             MutReferenceX::Base(..) => true,
             MutReferenceX::Deref(..) => false,
-            MutReferenceX::Index(m, ..) => m.is_simple(),
-            MutReferenceX::Slice(m, ..) => m.is_simple(),
+            MutReferenceX::Index(m, ..) => m.has_deref(),
+            MutReferenceX::Slice(m, ..) => m.has_deref(),
         }
     }
+
+    /// Check if the mutable reference has unknown indices or not
+    // pub fn has_unknown(&self) -> bool {
+    //     match self {
+    //         MutReferenceX::Base(..) => false,
+    //         MutReferenceX::Deref(..) => false,
+    //         MutReferenceX::Index(m, ..) => m.has_deref(),
+    //         MutReferenceX::Slice(m, ..) => m.has_deref(),
+    //     }
+    // }
 
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
@@ -603,17 +672,17 @@ impl MutReferenceX {
         }
     }
 
-    // Substitute the highest level deref with a fixed reference to a mutable
-    pub fn substitute_deref_with_mut_name(mut_ref: impl Borrow<MutReference>, name: &MutName) -> MutReference {
-        match &mut_ref.borrow().x {
-            MutReferenceX::Base(..) => mut_ref.borrow().clone(),
-            MutReferenceX::Deref(..) => Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Base(name.clone())),
-            MutReferenceX::Index(m, t) =>
-                Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
-            MutReferenceX::Slice(m, t1, t2) =>
-                Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
-        }
-    }
+    // // Substitute the highest level deref with a fixed reference to a mutable
+    // pub fn substitute_deref_with_mut_name(mut_ref: impl Borrow<MutReference>, name: &MutName) -> MutReference {
+    //     match &mut_ref.borrow().x {
+    //         MutReferenceX::Base(..) => mut_ref.borrow().clone(),
+    //         MutReferenceX::Deref(..) => Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Base(name.clone())),
+    //         MutReferenceX::Index(m, t) =>
+    //             Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
+    //         MutReferenceX::Slice(m, t1, t2) =>
+    //             Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
+    //     }
+    // }
 }
 
 impl ProcX {
@@ -939,10 +1008,39 @@ impl fmt::Display for BaseType {
         match self {
             BaseType::Bool => write!(f, "bool"),
             BaseType::Int => write!(f, "int"),
-            BaseType::Ref(ns, level) => if ns.len() == 1 {
-                write!(f, "&{}{}", ns[0], "[*]".repeat(*level))
-            } else {
-                write!(f, "&{{{}}}{}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "), "[*]".repeat(*level))
+            // BaseType::Ref(ns, level) => if ns.len() == 1 {
+            //     write!(f, "&{}{}", ns[0], "[*]".repeat(*level))
+            // } else {
+            //     write!(f, "&{{{}}}{}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "), "[*]".repeat(*level))
+            // }
+        }
+    }
+}
+
+impl fmt::Display for TermTypeX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TermTypeX::Base(t) => write!(f, "{}", t),
+            TermTypeX::Ref(refs) => {
+                if refs.len() == 1 {
+                    write!(f, "&")?;
+                } else {
+                    write!(f, "&{{")?;
+                }
+
+                for (i, mut_ref) in refs.iter().enumerate() {
+                    if i == 0 {
+                        write!(f, "{}", mut_ref)?;
+                    } else {
+                        write!(f, ", {}", mut_ref)?;
+                    }
+                }
+
+                if refs.len() == 1 {
+                    Ok(())
+                } else {
+                    write!(f, "&}}")
+                }
             }
         }
     }
@@ -1051,6 +1149,35 @@ impl fmt::Display for PermFraction {
     }
 }
 
+impl fmt::Display for MutReferenceIndex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MutReferenceIndex::Const(i) => write!(f, "{}", i),
+            MutReferenceIndex::Unknown => write!(f, "*"),
+        }
+    }
+}
+
+impl fmt::Display for MutReferenceTypeX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MutReferenceTypeX::Base(name) => write!(f, "{}", name),
+            MutReferenceTypeX::Index(m, i) => write!(f, "{}[{}]", m, i),
+            MutReferenceTypeX::Slice(m, i1, i2) => {
+                write!(f, "{}[", m)?;
+                if let Some(i1) = i1 {
+                    write!(f, "{}", i1)?;
+                }
+                write!(f, "..")?;
+                if let Some(i2) = i2 {
+                    write!(f, "{}", i2)?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
 impl fmt::Display for MutReferenceX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1062,12 +1189,17 @@ impl fmt::Display for MutReferenceX {
                     write!(f, "*({})", t)
                 }
             MutReferenceX::Index(m, t) => write!(f, "{}[{}]", m, t),
-            MutReferenceX::Slice(m, t1, t2) =>
-                write!(
-                    f, "{}[{}..{}]", m,
-                    t1.as_ref().unwrap_or(&TermX::var("")),
-                    t2.as_ref().unwrap_or(&TermX::var("")),
-                ),
+            MutReferenceX::Slice(m, t1, t2) => {
+                write!(f, "{}[", m)?;
+                if let Some(t1) = t1 {
+                    write!(f, "{}", t1)?;
+                }
+                write!(f, "..")?;
+                if let Some(t2) = t2 {
+                    write!(f, "{}", t2)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

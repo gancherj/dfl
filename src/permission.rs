@@ -7,7 +7,7 @@
  * [write A[n..m]] := write A[i][j] for any n <= i < m, and any j
  */
 
-use std::fmt;
+use std::{borrow::Borrow, fmt};
 use std::rc::Rc;
 
 use im::Vector;
@@ -56,11 +56,10 @@ impl fmt::Display for PermJudgment {
 }
 
 impl BaseType {
-    pub fn as_smt_sort(&self) -> Option<smt::Sort> {
+    pub fn as_smt_sort(&self) -> smt::Sort {
         match self {
-            BaseType::Bool => Some(smt::Sort::Bool),
-            BaseType::Int => Some(smt::Sort::Int),
-            BaseType::Ref(..) => None, // unsupported yet
+            BaseType::Bool => smt::Sort::Bool,
+            BaseType::Int => smt::Sort::Int,
         }
     }
 }
@@ -166,57 +165,7 @@ impl PermissionX {
                     conditions.push(smt::TermX::eq(&interp.frac_idx, smt::TermX::int(*k as u64)));
                 }
 
-                // Check if the indices are within the bound
-                // indices = [ i_1, ..., i_n ]
-                // where i_1 are the index for the outermost dimension
-                let mut rem_mut_ref = mut_ref;
-                let mut index_ranges = Vec::new();
-
-                // In a mutable reference A[s_1][s_2]..[s_m]
-                // Extract the slices and put them in a vector
-                // index_ranges = [ s_m, ..., s_2, s_1 ]
-                loop {
-                    match &rem_mut_ref.x {
-                        MutReferenceX::Base(base) => {
-                            // If this reference is talking about some other
-                            // mutable, the permission is always false
-                            let base_mut_idx = ctx.get_mut_index(base)
-                                .ok_or(Error::spanned(rem_mut_ref.span, format!("undefined mutable {base}")))?;
-                            conditions.push(smt::TermX::eq(&interp.mut_idx, smt::TermX::int(base_mut_idx as u64)));
-                            break;
-                        }
-                        MutReferenceX::Deref(..) => unimplemented!("deref in permission"),
-                        MutReferenceX::Index(mut_ref, ..) |
-                        MutReferenceX::Slice(mut_ref, ..) => {
-                            index_ranges.push(rem_mut_ref.clone());
-                            rem_mut_ref = mut_ref;
-                        },
-                    };
-                }
-
-                assert!(index_ranges.len() <= interp.arr_indices.len());
-
-                // Want to check that each idx is within the range specified by the outermost slice of mut_ref
-                for (idx, mut_ref) in interp.arr_indices.iter().zip(index_ranges.iter().rev()) {
-                    match &mut_ref.x {
-                        MutReferenceX::Base(..) => unreachable!(),
-                        MutReferenceX::Deref(..) => unreachable!(),
-                        MutReferenceX::Index(_, t) => {
-                            conditions.push(smt::TermX::eq(idx, TermX::as_smt_term(t, interp)?));
-                        }
-                        MutReferenceX::Slice(_, t1, t2) => {
-                            // t1 <= idx
-                            if let Some(t1) = t1 {
-                                conditions.push(smt::TermX::le(TermX::as_smt_term(t1, interp)?, idx));
-                            }
-
-                            // idx < t2
-                            if let Some(t2) = t2 {
-                                conditions.push(smt::TermX::lt(idx, TermX::as_smt_term(t2, interp)?));
-                            }
-                        }
-                    }
-                }
+                PermissionX::generate_mut_ref_conditions(ctx, interp, mut_ref, &mut conditions, &mut smt::TermX::int(0), &mut 0)?;
 
                 Ok(smt::TermX::and(conditions))
             }
@@ -240,6 +189,60 @@ impl PermissionX {
             }
             // Error::spanned_err(perm.span, format!("permission variable not supported for SMT encoding"))
         }
+    }
+
+    /// Generate range conditions on array indices
+    /// from a mutable reference
+    /// e.g. A[a:b][c][d:e] => a <= idx0 < b /\ idx0 == a + c /\ d <= idx1 < e
+    fn generate_mut_ref_conditions(
+        ctx: &Ctx,
+        interp: &Interpretation,
+        mut_ref: &MutReference,
+        conditions: &mut Vec<smt::Term>,
+        current_base: &mut smt::Term,
+        current_idx: &mut usize,
+    ) -> Result<(), Error> {
+        match &mut_ref.x {
+            MutReferenceX::Base(base) => {
+                // If this reference is talking about some other
+                // mutable, the permission is always false
+                let base_mut_idx = ctx.get_mut_index(base)
+                    .ok_or(Error::spanned(mut_ref.span, format!("undefined mutable {base}")))?;
+                conditions.push(smt::TermX::eq(&interp.mut_idx, smt::TermX::int(base_mut_idx as u64)));
+
+                *current_base = smt::TermX::int(0);
+                *current_idx = 0;
+            }
+            MutReferenceX::Deref(..) => unimplemented!("deref in permission"),
+            MutReferenceX::Index(mut_ref, t) => {
+                PermissionX::generate_mut_ref_conditions(ctx, interp, mut_ref, conditions, current_base, current_idx)?;
+
+                conditions.push(smt::TermX::eq(
+                    &interp.arr_indices[*current_idx],
+                    smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, interp)?),
+                ));
+
+                // Move on to the next index
+                *current_base = smt::TermX::int(0);
+                *current_idx += 1;
+            }
+            MutReferenceX::Slice(mut_ref, t1, t2) => {
+                PermissionX::generate_mut_ref_conditions(ctx, interp, mut_ref, conditions, current_base, current_idx)?;
+
+                // t1 <= idx
+                if let Some(t1) = t1 {
+                    let t1_smt = TermX::as_smt_term(t1, interp)?;
+                    conditions.push(smt::TermX::le(&t1_smt, &interp.arr_indices[*current_idx]));
+                    *current_base = smt::TermX::add(current_base.clone(), t1_smt);
+                }
+
+                // idx < t2
+                if let Some(t2) = t2 {
+                    conditions.push(smt::TermX::lt(&interp.arr_indices[*current_idx], TermX::as_smt_term(t2, interp)?));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -270,13 +273,13 @@ impl PermInferOptions {
 impl Interpretation {
     /// Generate a SyGuS grammar for a permission variable
     fn generate_synthsis_grammar(options: &PermInferOptions, ctx: &Ctx, perm_decl: &PermDecl) -> SynthFunGrammar {
-        let num_arr_idx = ctx.max_mut_dim();
+        let num_arr_idx: usize = ctx.max_mut_dim();
             
         Rc::new(smt::SynthFunGrammarX {
             symbols: [
                 smt::NonTerminal::new("Start", smt::Sort::Bool, [
                     smt::TermX::var("StartAtom"),
-                    smt::TermX::or([smt::TermX::var("StartAtom"), smt::TermX::var("Start")]),
+                    smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
                 ].into_iter().chain(
                     if options.use_ite {
                         vec![smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))]
@@ -428,12 +431,10 @@ impl Interpretation {
 
         // Set up constant interpretations
         for decl in ctx.consts.values() {
-            if let Some(sort) = decl.typ.as_smt_sort() {
-                let fresh_var = smt::TermX::var(
-                    fresh_universal_var(format!("const_{}", decl.name.as_str()), sort),
-                );
-                interp.consts.insert(decl.name.clone(), fresh_var);
-            } // ignore unsupported sort
+            let fresh_var = smt::TermX::var(
+                fresh_universal_var(format!("const_{}", decl.name.as_str()), decl.typ.as_smt_sort()),
+            );
+            interp.consts.insert(decl.name.clone(), fresh_var);
         }
 
         // For SyGuS only, set up permission variable interpretations
@@ -448,7 +449,7 @@ impl Interpretation {
                 // frac_idx is the fraction index
                 let inputs =
                     decl.param_typs.iter()
-                        .filter_map(|t| t.as_smt_sort())
+                        .map(|t| t.as_smt_sort())
                         .enumerate()
                         .map(|(i, t)| (format!("x{}", i), t))
                         .chain([ ("mut_idx".to_string(), smt::Sort::Int) ])
@@ -459,6 +460,7 @@ impl Interpretation {
                     format!("pv_{}", decl.name),
                     inputs,
                     smt::Sort::Bool,
+                    // None,
                     Some(&Interpretation::generate_synthsis_grammar(options, ctx, decl)),
                 );
     
@@ -630,9 +632,9 @@ impl PermJudgment {
         // Only local variables need to be rebinded
         interp.vars.clear();
         for (v, t) in &self.local.vars {
-            if let Some(sort) = t.as_smt_sort() {
+            if let TermTypeX::Base(t) = t.borrow() {
                 let fresh_var = smt::TermX::var(
-                    fresh_universal_var(format!("var_{}", v.as_str()), sort),
+                    fresh_universal_var(format!("var_{}", v.as_str()), t.as_smt_sort()),
                 );
                 interp.vars.insert(v.clone(), fresh_var);
             } // ignore unsupported sort
