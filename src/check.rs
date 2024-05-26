@@ -1,8 +1,8 @@
+use im::Vector;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Borrow;
 use std::fmt;
 use std::rc::Rc;
-use im::Vector;
-use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::*;
 use crate::permission::*;
@@ -82,19 +82,24 @@ impl MutReferenceTypeX {
     /// then &A[1:][*] has type [int]
     pub fn type_check(&self, ctx: &Ctx) -> Result<MutType, String> {
         match self {
-            MutReferenceTypeX::Base(m) =>
-                Ok(ctx.muts.get(m).ok_or(format!("mutable `{}` does not exist", m))?.typ.clone()),
+            MutReferenceTypeX::Base(m) => Ok(ctx
+                .muts
+                .get(m)
+                .ok_or(format!("mutable `{}` does not exist", m))?
+                .typ
+                .clone()),
 
-            MutReferenceTypeX::Index(t, ..) =>
-                match t.type_check(ctx)?.borrow() {
-                    MutTypeX::Base(..) => Err(format!("cannot index into a base mutable type")),
-                    MutTypeX::Array(t) => Ok(t.clone()),
-                }
-    
+            MutReferenceTypeX::Index(t, ..) => match t.type_check(ctx)?.borrow() {
+                MutTypeX::Base(..) => Err(format!("cannot index into a base mutable type")),
+                MutTypeX::Array(t) => Ok(t.clone()),
+            },
+
             MutReferenceTypeX::Slice(t, ..) => {
                 let typ = t.type_check(ctx)?;
                 match typ.borrow() {
-                    MutTypeX::Base(..) => Err(format!("cannot take the slice of a base mutable type")),
+                    MutTypeX::Base(..) => {
+                        Err(format!("cannot take the slice of a base mutable type"))
+                    }
                     MutTypeX::Array(..) => Ok(typ.clone()),
                 }
             }
@@ -105,27 +110,29 @@ impl MutReferenceTypeX {
     /// e.g.
     /// A[1..] <= A[*..]
     /// A[1..3] <= A[*..*]
-    /// 
+    ///
     /// However, for simplicity, we currently do not
     /// consider subtypings like A[1..][1..] <= A[2..]
     /// i.e. both references need to be of the same "shape"
     pub fn is_subtype(&self, other: &MutReferenceType) -> bool {
         match (self, &other.borrow()) {
             (MutReferenceTypeX::Base(n1), MutReferenceTypeX::Base(n2)) => n1 == n2,
-            (MutReferenceTypeX::Index(m1, i1), MutReferenceTypeX::Index(m2, i2)) =>
-                m1.is_subtype(m2) && i1.is_subsumed_by(i2),
-            (MutReferenceTypeX::Slice(m1, i1, j1), MutReferenceTypeX::Slice(m2, i2, j2)) =>
-                m1.is_subtype(m2) &&
-                match (i1, i2) {
-                    (None, None) => true,
-                    (Some(i1), Some(i2)) => i1.is_subsumed_by(i2),
-                    _ => false,
-                } &&
-                match (j1, j2) {
-                    (None, None) => true,
-                    (Some(j1), Some(j2)) => j1.is_subsumed_by(j2),
-                    _ => false,
-                },
+            (MutReferenceTypeX::Index(m1, i1), MutReferenceTypeX::Index(m2, i2)) => {
+                m1.is_subtype(m2) && i1.is_subsumed_by(i2)
+            }
+            (MutReferenceTypeX::Slice(m1, i1, j1), MutReferenceTypeX::Slice(m2, i2, j2)) => {
+                m1.is_subtype(m2)
+                    && match (i1, i2) {
+                        (None, None) => true,
+                        (Some(i1), Some(i2)) => i1.is_subsumed_by(i2),
+                        _ => false,
+                    }
+                    && match (j1, j2) {
+                        (None, None) => true,
+                        (Some(j1), Some(j2)) => j1.is_subsumed_by(j2),
+                        _ => false,
+                    }
+            }
             _ => false,
         }
     }
@@ -137,9 +144,11 @@ impl MutReferenceTypeX {
             MutReferenceIndex::Const(i) => TermX::int(*i),
             MutReferenceIndex::Unknown => {
                 let fresh_var = format!("*{}", local.vars.len());
-                local.vars.insert(fresh_var.as_str().into(), TermTypeX::int());
+                local
+                    .vars
+                    .insert(fresh_var.as_str().into(), TermTypeX::int());
                 TermX::var(fresh_var)
-            },
+            }
         }
     }
 
@@ -149,14 +158,15 @@ impl MutReferenceTypeX {
     pub fn concretize(&self, local: &mut LocalCtx) -> MutReference {
         match self {
             MutReferenceTypeX::Base(n) => Spanned::new(MutReferenceX::Base(n.clone())),
-            MutReferenceTypeX::Index(m, i) =>
-                Spanned::new(MutReferenceX::Index(m.concretize(local), Self::concretize_index(i, local))),
-            MutReferenceTypeX::Slice(m, i1, i2) =>
-                Spanned::new(MutReferenceX::Slice(
-                    m.concretize(local),
-                    i1.clone().map(|i| Self::concretize_index(&i, local)),
-                    i2.clone().map(|i| Self::concretize_index(&i, local)),
-                )),
+            MutReferenceTypeX::Index(m, i) => Spanned::new(MutReferenceX::Index(
+                m.concretize(local),
+                Self::concretize_index(i, local),
+            )),
+            MutReferenceTypeX::Slice(m, i1, i2) => Spanned::new(MutReferenceX::Slice(
+                m.concretize(local),
+                i1.clone().map(|i| Self::concretize_index(&i, local)),
+                i2.clone().map(|i| Self::concretize_index(&i, local)),
+            )),
         }
     }
 }
@@ -165,20 +175,23 @@ impl TermTypeX {
     /// Checks if self <= other in subtyping
     pub fn is_subtype(&self, other: &TermTypeX) -> bool {
         match self {
-            TermTypeX::Base(t) =>
+            TermTypeX::Base(t) => {
                 if let TermTypeX::Base(other) = other {
-                    return t.is_subtype(other)
+                    return t.is_subtype(other);
                 } else {
                     false
                 }
-            TermTypeX::Ref(refs1) =>
+            }
+            TermTypeX::Ref(refs1) => {
                 if let TermTypeX::Ref(refs2) = other {
                     // Each type in refs1 is a subtype of some type in ref2
-                    refs1.iter().all(|ref_typ1|
-                        refs2.iter().any(|ref_typ2| ref_typ1.is_subtype(ref_typ2)))
+                    refs1
+                        .iter()
+                        .all(|ref_typ1| refs2.iter().any(|ref_typ2| ref_typ1.is_subtype(ref_typ2)))
                 } else {
                     false
                 }
+            }
         }
     }
 
@@ -200,15 +213,22 @@ impl TermTypeX {
                 if refs.len() == 0 {
                     return Err(format!("Empty reference type {}", self));
                 }
-                let mut_typs = refs.iter().map(|r| r.type_check(ctx)).collect::<Result<IndexSet<_>, _>>()?;
+                let mut_typs = refs
+                    .iter()
+                    .map(|r| r.type_check(ctx))
+                    .collect::<Result<IndexSet<_>, _>>()?;
 
                 if mut_typs.len() != 1 {
                     return Err(format!(
                         "reference to mutable(s) with inconsistent types {{ {} }}",
-                        mut_typs.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "),
+                        mut_typs
+                            .iter()
+                            .map(|t| t.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                     ));
                 }
-                
+
                 Ok((mut_typs.first().unwrap().clone(), refs.clone()))
             }
         }
@@ -218,38 +238,64 @@ impl TermTypeX {
 impl MutReferenceX {
     /// Type check and then get the mutable type the mutable reference should refer to
     /// e.g. mut A: [[int]] => A[a:b][c].type_check() = [int]
-    pub fn type_check(mut_ref: &MutReference, ctx: &Ctx, local: &LocalCtx) -> Result<MutType, Error> {
+    pub fn type_check(
+        mut_ref: &MutReference,
+        ctx: &Ctx,
+        local: &LocalCtx,
+    ) -> Result<MutType, Error> {
         match &mut_ref.x {
-            MutReferenceX::Base(n) =>
-                Ok(ctx.muts.get(n).ok_or(Error::spanned(mut_ref.span, format!("mutable `{}` not declared", n)))?.typ.clone()),
+            MutReferenceX::Base(n) => Ok(ctx
+                .muts
+                .get(n)
+                .ok_or(Error::spanned(
+                    mut_ref.span,
+                    format!("mutable `{}` not declared", n),
+                ))?
+                .typ
+                .clone()),
             MutReferenceX::Deref(t) => {
                 let typ = TermX::type_check(t, ctx, local)?;
-                let (mut_type, _) = typ.get_mut_type(ctx).map_err(|msg| Error::spanned(mut_ref.span, msg))?;
+                let (mut_type, _) = typ
+                    .get_mut_type(ctx)
+                    .map_err(|msg| Error::spanned(mut_ref.span, msg))?;
                 Ok(mut_type)
             }
             MutReferenceX::Index(m, t) => {
                 if !TermX::type_check(t, ctx, local)?.is_int() {
-                    return Error::spanned_err(mut_ref.span, format!("index to a mutable should be int"));
+                    return Error::spanned_err(
+                        mut_ref.span,
+                        format!("index to a mutable should be int"),
+                    );
                 }
                 match MutReferenceX::type_check(m, ctx, local)?.borrow() {
-                    MutTypeX::Base(..) => Error::spanned_err(mut_ref.span, format!("indexing into base type")),
+                    MutTypeX::Base(..) => {
+                        Error::spanned_err(mut_ref.span, format!("indexing into base type"))
+                    }
                     MutTypeX::Array(typ) => Ok(typ.clone()),
                 }
             }
             MutReferenceX::Slice(m, t1, t2) => {
                 if let Some(t1) = t1 {
                     if !TermX::type_check(t1, ctx, local)?.is_int() {
-                        return Error::spanned_err(mut_ref.span, format!("index to a mutable should be int"));
+                        return Error::spanned_err(
+                            mut_ref.span,
+                            format!("index to a mutable should be int"),
+                        );
                     }
                 }
                 if let Some(t2) = t2 {
                     if !TermX::type_check(t2, ctx, local)?.is_int() {
-                        return Error::spanned_err(mut_ref.span, format!("index to a mutable should be int"));
+                        return Error::spanned_err(
+                            mut_ref.span,
+                            format!("index to a mutable should be int"),
+                        );
                     }
                 }
                 let typ = MutReferenceX::type_check(m, ctx, local)?;
                 match typ.borrow() {
-                    MutTypeX::Base(..) => Error::spanned_err(mut_ref.span, format!("slicing into base type")),
+                    MutTypeX::Base(..) => {
+                        Error::spanned_err(mut_ref.span, format!("slicing into base type"))
+                    }
                     MutTypeX::Array(..) => Ok(typ),
                 }
             }
@@ -257,30 +303,43 @@ impl MutReferenceX {
     }
 
     /// Overapproximate the mutable reference as a set of mutable reference types
-    pub fn approximate(mut_ref: &MutReference, ctx: &Ctx, local: &LocalCtx) -> Result<Vec<MutReferenceType>, Error> {
+    pub fn approximate(
+        mut_ref: &MutReference,
+        ctx: &Ctx,
+        local: &LocalCtx,
+    ) -> Result<Vec<MutReferenceType>, Error> {
         match &mut_ref.x {
-            MutReferenceX::Base(n) =>
-                Ok(vec![Rc::new(MutReferenceTypeX::Base(n.clone()))]),
+            MutReferenceX::Base(n) => Ok(vec![Rc::new(MutReferenceTypeX::Base(n.clone()))]),
             MutReferenceX::Deref(t) => {
                 let typ = TermX::type_check(t, ctx, local)?;
-                let (_, base_refs) = typ.get_mut_type(ctx).map_err(|msg| Error::spanned(mut_ref.span, msg))?;
+                let (_, base_refs) = typ
+                    .get_mut_type(ctx)
+                    .map_err(|msg| Error::spanned(mut_ref.span, msg))?;
                 Ok(base_refs)
             }
             MutReferenceX::Index(m, t) => {
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
-                Ok(refs.iter()
-                    .map(|r| Rc::new(MutReferenceTypeX::Index(r.clone(), MutReferenceIndex::from_term(t))))
+                Ok(refs
+                    .iter()
+                    .map(|r| {
+                        Rc::new(MutReferenceTypeX::Index(
+                            r.clone(),
+                            MutReferenceIndex::from_term(t),
+                        ))
+                    })
                     .collect())
             }
             MutReferenceX::Slice(m, t1, t2) => {
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
-                Ok(refs.iter()
-                    .map(|r|
+                Ok(refs
+                    .iter()
+                    .map(|r| {
                         Rc::new(MutReferenceTypeX::Slice(
                             r.clone(),
                             t1.clone().map(|t| MutReferenceIndex::from_term(&t)),
                             t2.clone().map(|t| MutReferenceIndex::from_term(&t)),
-                        )))
+                        ))
+                    })
                     .collect())
             }
         }
@@ -288,26 +347,34 @@ impl MutReferenceX {
 
     /// Concretize a mutable reference with potentially a deref at the base
     /// (if there is no deref, the result should be identical to the original mutable reference)
-    pub fn concretize(mut_ref: &MutReference, ctx: &Ctx, local: &mut LocalCtx) -> Result<Vec<MutReference>, Error> {
+    pub fn concretize(
+        mut_ref: &MutReference,
+        ctx: &Ctx,
+        local: &mut LocalCtx,
+    ) -> Result<Vec<MutReference>, Error> {
         match &mut_ref.x {
             MutReferenceX::Base(..) => Ok(vec![mut_ref.clone()]),
             MutReferenceX::Deref(t) => {
                 let typ = TermX::type_check(t, ctx, local)?;
-                let (_, base_refs) = typ.get_mut_type(ctx).map_err(|msg| Error::spanned(mut_ref.span, msg))?;
+                let (_, base_refs) = typ
+                    .get_mut_type(ctx)
+                    .map_err(|msg| Error::spanned(mut_ref.span, msg))?;
                 Ok(base_refs.iter().map(|r| r.concretize(local)).collect())
             }
-            MutReferenceX::Index(m, t) =>
-                Ok(Self::concretize(m, ctx, local)?.into_iter()
-                    .map(|m| Spanned::new(MutReferenceX::Index(m, t.clone()))).collect()),
-            MutReferenceX::Slice(m, t1, t2) =>
-                Ok(Self::concretize(m, ctx, local)?.into_iter()
-                    .map(|m| Spanned::new(MutReferenceX::Slice(m, t1.clone(), t2.clone()))).collect()),
+            MutReferenceX::Index(m, t) => Ok(Self::concretize(m, ctx, local)?
+                .into_iter()
+                .map(|m| Spanned::new(MutReferenceX::Index(m, t.clone())))
+                .collect()),
+            MutReferenceX::Slice(m, t1, t2) => Ok(Self::concretize(m, ctx, local)?
+                .into_iter()
+                .map(|m| Spanned::new(MutReferenceX::Slice(m, t1.clone(), t2.clone())))
+                .collect()),
         }
     }
 
     // / Check that the terms are well-typed
     // / and we are not indexing into base types.
-    // / 
+    // /
     // / Return:
     // / 1. Type of the mutable reference (i.e. if mut A: [int], type_check(A[1]) = int)
     // / 2. Overapproximation of the base reference as MutReferenceType
@@ -385,18 +452,24 @@ impl TermX {
             TermX::Var(var) => Ok(local
                 .vars
                 .get(var)
-                .ok_or(Error::spanned(term.span, format!("variable `{}` not in context", var)))?
+                .ok_or(Error::spanned(
+                    term.span,
+                    format!("variable `{}` not in context", var),
+                ))?
                 .clone()),
-            TermX::Const(c) =>
-                ctx.consts
-                    .get(c)
-                    .map(|decl| TermTypeX::base(&decl.typ))
-                    .ok_or(Error::spanned(term.span, format!("constant `{}` not defined", c))),
+            TermX::Const(c) => ctx
+                .consts
+                .get(c)
+                .map(|decl| TermTypeX::base(&decl.typ))
+                .ok_or(Error::spanned(
+                    term.span,
+                    format!("constant `{}` not defined", c),
+                )),
             TermX::Ref(m) => {
                 MutReferenceX::type_check(m, ctx, local)?;
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
                 Ok(Rc::new(TermTypeX::Ref(refs)))
-            },
+            }
             TermX::Bool(_) => Ok(TermTypeX::bool()),
             TermX::Int(_) => Ok(TermTypeX::int()),
             TermX::Add(t1, t2) | TermX::Mul(t1, t2) => {
@@ -450,13 +523,18 @@ impl PermissionX {
     pub fn type_check(perm: &Permission, ctx: &Ctx, local: &LocalCtx) -> Result<(), Error> {
         match &perm.x {
             PermissionX::Empty => Ok(()),
-            PermissionX::Add(p1, p2) =>
-                PermissionX::type_check(p1, ctx, local).and(PermissionX::type_check(p2, ctx, local)),
-            PermissionX::Sub(p1, p2) =>
-                PermissionX::type_check(p1, ctx, local).and(PermissionX::type_check(p2, ctx, local)),
+            PermissionX::Add(p1, p2) => {
+                PermissionX::type_check(p1, ctx, local).and(PermissionX::type_check(p2, ctx, local))
+            }
+            PermissionX::Sub(p1, p2) => {
+                PermissionX::type_check(p1, ctx, local).and(PermissionX::type_check(p2, ctx, local))
+            }
             PermissionX::Ite(t, p1, p2) => {
                 if !TermX::type_check(t, ctx, local)?.is_bool() {
-                    Error::spanned_err(perm.span, format!("permission if condition is not of type bool"))
+                    Error::spanned_err(
+                        perm.span,
+                        format!("permission if condition is not of type bool"),
+                    )
                 } else {
                     PermissionX::type_check(p1, ctx, local)?;
                     PermissionX::type_check(p2, ctx, local)?;
@@ -464,10 +542,14 @@ impl PermissionX {
                 }
             }
             // TODO: should we allow deref in permission?
-            PermissionX::Fraction(_, mut_ref) => MutReferenceX::type_check(mut_ref, ctx, local).map(|_| ()),
+            PermissionX::Fraction(_, mut_ref) => {
+                MutReferenceX::type_check(mut_ref, ctx, local).map(|_| ())
+            }
             PermissionX::Var(v, terms) => {
-                let decl = ctx.perms.get(v)
-                    .ok_or(Error::spanned(perm.span, format!("permission variable `{}` not declared", v)))?;
+                let decl = ctx.perms.get(v).ok_or(Error::spanned(
+                    perm.span,
+                    format!("permission variable `{}` not declared", v),
+                ))?;
 
                 if decl.param_typs.len() != terms.len() {
                     return Error::spanned_err(
@@ -504,27 +586,32 @@ impl ProcX {
         match &proc.x {
             ProcX::Skip => Ok(()),
             ProcX::Send(c, t, k) => {
-                let chan_decl = ctx
-                    .chans
-                    .get(c)
-                    .ok_or(Error::spanned(proc.span, format!("channel `{}` does not exist", c)))?;
+                let chan_decl = ctx.chans.get(c).ok_or(Error::spanned(
+                    proc.span,
+                    format!("channel `{}` does not exist", c),
+                ))?;
 
                 let t_typ = TermX::type_check(t, ctx, local)?;
                 if !t_typ.is_subtype(&chan_decl.typ) {
-                    return Error::spanned_err(proc.span, format!("unmatched send channel type: expecting {}, got {}", chan_decl.typ, t_typ));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!(
+                            "unmatched send channel type: expecting {}, got {}",
+                            chan_decl.typ, t_typ
+                        ),
+                    );
                 }
 
                 // Output resource should be in the resouce context
                 if !rctx.outs.contains(c) {
-                    return Error::spanned_err(proc.span, format!("resouce `output {}` not declared", c));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("resouce `output {}` not declared", c),
+                    );
                 }
-                
+
                 // Need to spend the permission required by the channel
-                let send_perm = PermissionX::substitute_one(
-                    &chan_decl.perm,
-                    &chan_decl.name,
-                    t,
-                );
+                let send_perm = PermissionX::substitute_one(&chan_decl.perm, &chan_decl.name, t);
                 constraints.push(PermJudgment {
                     local: local.clone(),
                     local_constraints: path_conditions.clone(),
@@ -536,30 +623,36 @@ impl ProcX {
                 ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
             }
             ProcX::Recv(c, v, k) => {
-                let chan_decl = ctx
-                    .chans
-                    .get(c)
-                    .ok_or(Error::spanned(proc.span, format!("channel `{}` does not exist", c)))?;
+                let chan_decl = ctx.chans.get(c).ok_or(Error::spanned(
+                    proc.span,
+                    format!("channel `{}` does not exist", c),
+                ))?;
 
                 // Input resource should be in the resouce context
                 if !rctx.ins.contains(c) {
-                    return Error::spanned_err(proc.span, format!("resouce `input {}` not declared", c));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("resouce `input {}` not declared", c),
+                    );
                 }
 
                 // Receive the permission contained in the channel
-                let recv_perm = PermissionX::substitute_one(
-                    &chan_decl.perm,
-                    &chan_decl.name,
-                    &TermX::var(v),
-                );
+                let recv_perm =
+                    PermissionX::substitute_one(&chan_decl.perm, &chan_decl.name, &TermX::var(v));
                 rctx.perm = PermissionX::add(&rctx.perm, &recv_perm);
 
                 // Receive a new variable
                 if local.vars.contains_key(v) {
-                    return Error::spanned_err(proc.span, format!("shadowing of local variable `{}` not supported", v));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("shadowing of local variable `{}` not supported", v),
+                    );
                 }
                 if ctx.consts.contains_key(&Const::from(v)) {
-                    return Error::spanned_err(proc.span, format!("shadowing of constant `{}` not supported", v));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("shadowing of constant `{}` not supported", v),
+                    );
                 }
                 local.vars.insert(v.clone(), chan_decl.typ.clone());
 
@@ -572,10 +665,19 @@ impl ProcX {
 
                 if let MutTypeX::Base(base) = MutReferenceX::type_check(m, ctx, local)?.borrow() {
                     if !t_typ.is_subtype(&TermTypeX::base(base)) {
-                        return Error::spanned_err(proc.span, format!("write type is different from mutable type: expect {}, got {}", t_typ, base));
+                        return Error::spanned_err(
+                            proc.span,
+                            format!(
+                                "write type is different from mutable type: expect {}, got {}",
+                                t_typ, base
+                            ),
+                        );
                     }
                 } else {
-                    return Error::spanned_err(proc.span, format!("cannot write to a non-base-typed mutable reference"));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("cannot write to a non-base-typed mutable reference"),
+                    );
                 }
 
                 // Check that we have suitable write permission
@@ -627,14 +729,23 @@ impl ProcX {
                 if let MutTypeX::Base(m_base) = mut_typ.borrow() {
                     // Add read variable into context
                     if local.vars.contains_key(v) {
-                        return Error::spanned_err(proc.span, format!("shadowing of local variable `{}` not supported", v));
+                        return Error::spanned_err(
+                            proc.span,
+                            format!("shadowing of local variable `{}` not supported", v),
+                        );
                     }
                     if ctx.consts.contains_key(&Const::from(v)) {
-                        return Error::spanned_err(proc.span, format!("shadowing of constant `{}` not supported", v));
+                        return Error::spanned_err(
+                            proc.span,
+                            format!("shadowing of constant `{}` not supported", v),
+                        );
                     }
                     local.vars.insert(v.clone(), TermTypeX::base(m_base));
                 } else {
-                    return Error::spanned_err(proc.span, format!("cannot read from a non-base-typed mutable reference"));
+                    return Error::spanned_err(
+                        proc.span,
+                        format!("cannot read from a non-base-typed mutable reference"),
+                    );
                 }
 
                 // Check rest of the process
@@ -654,28 +765,44 @@ impl ProcX {
                 path_conditions.push_back(t.clone());
                 path_conditions_copy.push_back(TermX::not(t));
 
-                ProcX::type_check_inplace(k1, ctx, local, rctx, path_conditions, constraints)
-                    .and(ProcX::type_check_inplace(k2, ctx, &mut local_copy, &mut res_copy, path_conditions_copy, constraints))
+                ProcX::type_check_inplace(k1, ctx, local, rctx, path_conditions, constraints).and(
+                    ProcX::type_check_inplace(
+                        k2,
+                        ctx,
+                        &mut local_copy,
+                        &mut res_copy,
+                        path_conditions_copy,
+                        constraints,
+                    ),
+                )
             }
 
             // P <args> has the same typing rules as P <args> || skip
-            ProcX::Call(..) =>
-                ProcX::type_check_inplace(
-                    &ProcX::par(proc, &ProcX::skip()),
-                    ctx, local, rctx, path_conditions, constraints,
-                ),
+            ProcX::Call(..) => ProcX::type_check_inplace(
+                &ProcX::par(proc, &ProcX::skip()),
+                ctx,
+                local,
+                rctx,
+                path_conditions,
+                constraints,
+            ),
 
             // TODO: currently, we only allow process calls to
             // be the LHS of a parallel composition.
             // Because the split of permissions need to be explicitly specified
             ProcX::Par(k1, k2) => {
                 if let ProcX::Call(name, args) = &k1.x {
-                    let proc_decl = ctx.procs.get(name)
-                        .ok_or(Error::spanned(k1.span, format!("process `{}` does not exist", name)))?;
+                    let proc_decl = ctx.procs.get(name).ok_or(Error::spanned(
+                        k1.span,
+                        format!("process `{}` does not exist", name),
+                    ))?;
 
                     // Check argument types are correct
                     if args.len() != proc_decl.params.len() {
-                        return Error::spanned_err(k1.span, format!("mismatched number of arguments"));
+                        return Error::spanned_err(
+                            k1.span,
+                            format!("mismatched number of arguments"),
+                        );
                     }
 
                     // Check argument types and construct param -> arg mapping
@@ -700,27 +827,38 @@ impl ProcX {
                                     perm_constraint: PermConstraintX::less_eq(&p_subst, &rctx.perm),
                                 });
                                 rctx.perm = PermissionX::sub(&rctx.perm, &p_subst);
-                            },
+                            }
 
                             // Check that input/output channels are within the resource context
-                            ProcResourceX::Input(name) =>
+                            ProcResourceX::Input(name) => {
                                 if !rctx.ins.shift_remove(name) {
-                                    return Error::spanned_err(k1.span, format!("required resource `input {}` not present at call site", name))
+                                    return Error::spanned_err(
+                                        k1.span,
+                                        format!(
+                                            "required resource `input {}` not present at call site",
+                                            name
+                                        ),
+                                    );
                                 }
+                            }
 
-                            ProcResourceX::Output(name) =>
+                            ProcResourceX::Output(name) => {
                                 if !rctx.outs.shift_remove(name) {
-                                    return Error::spanned_err(k1.span, format!("required resource `output {}` not present at call site", name))
+                                    return Error::spanned_err(k1.span, format!("required resource `output {}` not present at call site", name));
                                 }
+                            }
                         }
                     }
 
                     // Continue checking the rest of the parallel composition
                     ProcX::type_check_inplace(k2, ctx, local, rctx, path_conditions, constraints)
                 } else {
-                    Error::spanned_err(proc.span, format!("currently only process calls are allowed to be the LHS of ||"))
+                    Error::spanned_err(
+                        proc.span,
+                        format!("currently only process calls are allowed to be the LHS of ||"),
+                    )
                 }
-            },
+            }
             ProcX::Debug(k) => {
                 println!("local context: {:?}", local);
                 println!("resouce context: {:?}", rctx);
@@ -729,11 +867,23 @@ impl ProcX {
         }
     }
 
-    pub fn type_check(proc: &Proc, ctx: &Ctx, local: &LocalCtx, rctx: &ResourceCtx) -> Result<Vec<PermJudgment>, Error> {
+    pub fn type_check(
+        proc: &Proc,
+        ctx: &Ctx,
+        local: &LocalCtx,
+        rctx: &ResourceCtx,
+    ) -> Result<Vec<PermJudgment>, Error> {
         let mut local_copy = local.clone();
         let mut rctx_copy = rctx.clone();
         let mut constraints = Vec::new();
-        ProcX::type_check_inplace(proc, ctx, &mut local_copy, &mut rctx_copy, Vector::new(), &mut constraints)?;
+        ProcX::type_check_inplace(
+            proc,
+            ctx,
+            &mut local_copy,
+            &mut rctx_copy,
+            Vector::new(),
+            &mut constraints,
+        )?;
         Ok(constraints)
     }
 }
@@ -745,27 +895,29 @@ pub enum PermCheckMode {
 
     /// Infer permission variables using a synthesis solver
     Infer(smt::Solver, PermInferOptions),
-    
+
     /// Do not check permissions
     None,
 }
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(
-        &self,
-        mode: &mut PermCheckMode,
-    ) -> Result<(), Error> {
+    pub fn type_check(&self, mode: &mut PermCheckMode) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
         // Check mutable types are all non-reference types
         for decl in self.muts.values() {
-            decl.typ.get_base_type().type_check(self).map_err(|msg| Error::spanned(decl.span, msg))?;
+            decl.typ
+                .get_base_type()
+                .type_check(self)
+                .map_err(|msg| Error::spanned(decl.span, msg))?;
         }
 
         // Check channel types
         for decl in self.chans.values() {
-            decl.typ.type_check(self).map_err(|msg| Error::spanned(decl.span, msg))?;
+            decl.typ
+                .type_check(self)
+                .map_err(|msg| Error::spanned(decl.span, msg))?;
             PermissionX::type_check(
                 &decl.perm,
                 self,
@@ -790,7 +942,10 @@ impl Ctx {
             };
 
             for param in &decl.params {
-                param.typ.type_check(self).map_err(|msg| Error::spanned(decl.span, msg))?;
+                param
+                    .typ
+                    .type_check(self)
+                    .map_err(|msg| Error::spanned(decl.span, msg))?;
                 local.vars.insert(param.name.clone(), param.typ.clone());
             }
 
@@ -799,25 +954,37 @@ impl Ctx {
                     ProcResourceX::Perm(perm) => {
                         PermissionX::type_check(perm, self, &local)?;
                         rctx.perm = PermissionX::add(rctx.perm, perm);
-                    },
+                    }
                     ProcResourceX::Input(name) => {
                         if !self.chans.contains_key(name) {
-                            return Error::spanned_err(res.span, format!("channel `{}` does not exist", name));
+                            return Error::spanned_err(
+                                res.span,
+                                format!("channel `{}` does not exist", name),
+                            );
                         }
 
                         if !rctx.ins.insert(name.clone()) {
-                            return Error::spanned_err(res.span, format!("duplicate `input {}`", name));
+                            return Error::spanned_err(
+                                res.span,
+                                format!("duplicate `input {}`", name),
+                            );
                         }
-                    },
+                    }
                     ProcResourceX::Output(name) => {
                         if !self.chans.contains_key(name) {
-                            return Error::spanned_err(res.span, format!("channel `{}` does not exist", name));
+                            return Error::spanned_err(
+                                res.span,
+                                format!("channel `{}` does not exist", name),
+                            );
                         }
 
                         if !rctx.outs.insert(name.clone()) {
-                            return Error::spanned_err(res.span, format!("duplicate `output {}`", name));
+                            return Error::spanned_err(
+                                res.span,
+                                format!("duplicate `output {}`", name),
+                            );
                         }
-                    },
+                    }
                 }
             }
 

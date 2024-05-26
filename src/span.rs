@@ -1,5 +1,8 @@
 use core::fmt;
-use std::{ops::{Deref, DerefMut}, rc::Rc};
+use std::{
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
@@ -21,7 +24,10 @@ impl<X> Spanned<X> {
     }
 
     pub fn spanned(start: usize, end: usize, x: X) -> RcSpanned<X> {
-        Rc::new(Spanned { span: Some(Span { start, end }), x })
+        Rc::new(Spanned {
+            span: Some(Span { start, end }),
+            x,
+        })
     }
 
     pub fn spanned_option(span: Option<Span>, x: X) -> RcSpanned<X> {
@@ -49,7 +55,10 @@ impl<X> AsRef<X> for Spanned<X> {
     }
 }
 
-impl<X> fmt::Display for Spanned<X> where X: fmt::Display {
+impl<X> fmt::Display for Spanned<X>
+where
+    X: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.x)
     }
@@ -63,11 +72,17 @@ pub struct Error {
 
 impl Error {
     pub fn new(msg: impl Into<String>) -> Error {
-        Error { span: None, msg: msg.into() }
+        Error {
+            span: None,
+            msg: msg.into(),
+        }
     }
 
     pub fn spanned(span: Option<Span>, msg: impl Into<String>) -> Error {
-        Error { span: span, msg: msg.into() }
+        Error {
+            span: span,
+            msg: msg.into(),
+        }
     }
 
     pub fn new_err<T>(msg: impl Into<String>) -> Result<T, Error> {

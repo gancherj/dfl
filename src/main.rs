@@ -114,31 +114,38 @@ fn main() {
             assert!(!(args.check_perm && args.infer_perm));
 
             let mut mode = if args.check_perm {
-                PermCheckMode::Check(smt::Solver::new(args.solver, &args.solver_opts).expect("failed to create solver"))
+                PermCheckMode::Check(
+                    smt::Solver::new(args.solver, &args.solver_opts)
+                        .expect("failed to create solver"),
+                )
             } else if args.infer_perm {
-                let mut solver = smt::Solver::new(args.solver, &args.solver_opts).expect("failed to create solver");
+                let mut solver = smt::Solver::new(args.solver, &args.solver_opts)
+                    .expect("failed to create solver");
                 solver.set_logic("LIA").expect("failed to set logic");
-                PermCheckMode::Infer(solver, PermInferOptions {
-                    array_slices: args.array_slices,
-                    use_ite: args.use_ite,
-                    num_fractions: args.num_fractions,
-                })
+                PermCheckMode::Infer(
+                    solver,
+                    PermInferOptions {
+                        array_slices: args.array_slices,
+                        use_ite: args.use_ite,
+                        num_fractions: args.num_fractions,
+                    },
+                )
             } else {
                 PermCheckMode::None
             };
-            
+
             match ctx.type_check(&mut mode) {
-                Ok(()) => {},
+                Ok(()) => {}
                 Err(err) => {
                     let loc = match err.span {
                         Some(span) => {
                             let (line, col) = get_line_col_num(&src, span.start).unwrap();
                             format!("{}:{}:{}", path, line, col)
                         }
-                        None => format!("{}", path)
+                        None => format!("{}", path),
                     };
                     println!("typing error: {}: {}", loc, err.msg);
-                },
+                }
             }
         }
         Err(e) => {
@@ -151,11 +158,16 @@ fn main() {
                     let (line, col) = get_line_col_num(&src, location).unwrap();
                     format!("unexpected eof at {}:{}:{}", path, line, col)
                 }
-                ParseError::UnrecognizedToken { token: (start, token, _), .. } => {
+                ParseError::UnrecognizedToken {
+                    token: (start, token, _),
+                    ..
+                } => {
                     let (line, col) = get_line_col_num(&src, start).unwrap();
                     format!("unexpected token {} at {}:{}:{}", token, path, line, col)
                 }
-                ParseError::ExtraToken { token: (start, token, _) } => {
+                ParseError::ExtraToken {
+                    token: (start, token, _),
+                } => {
                     let (line, col) = get_line_col_num(&src, start).unwrap();
                     format!("extra token {} at {}:{}:{}", token, path, line, col)
                 }
