@@ -1039,7 +1039,7 @@ impl fmt::Display for TermTypeX {
                 if refs.len() == 1 {
                     Ok(())
                 } else {
-                    write!(f, "&}}")
+                    write!(f, "}}")
                 }
             }
         }

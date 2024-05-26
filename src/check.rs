@@ -776,6 +776,7 @@ impl Ctx {
         }
 
         let mut all_constraints = Vec::new();
+        let mut all_perm_valid = true;
 
         // Check process types
         for decl in self.procs.values() {
@@ -828,7 +829,8 @@ impl Ctx {
                     if constraint.check_validity(self, solver)? {
                         println!("  valid: {}", constraint)
                     } else {
-                        println!("  not valid: {}", constraint)
+                        println!("  not valid: {}", constraint);
+                        all_perm_valid = false;
                     }
                 } else {
                     println!("  {}", constraint);
@@ -845,10 +847,15 @@ impl Ctx {
                 }
                 None => {
                     println!("fail to infer permission variables");
+                    all_perm_valid = false;
                 }
             }
         }
 
-        Ok(())
+        if all_perm_valid {
+            Ok(())
+        } else {
+            Error::new_err(format!("type checking failed"))
+        }
     }
 }
