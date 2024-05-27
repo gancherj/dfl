@@ -125,12 +125,19 @@ pub enum TermX {
 
     Ref(MutReference),
 
+    // Integer operations
     Add(Term, Term),
     Mul(Term, Term),
-
-    And(Term, Term),
     Less(Term, Term),
+
+    // BV operations,
+    BVAdd(Term, Term),
+    BVMul(Term, Term),
+    BVULT(Term, Term),
+    BVSLT(Term, Term),
+
     Equal(Term, Term),
+    And(Term, Term),
     Not(Term),
 }
 
@@ -405,6 +412,21 @@ impl TermTypeX {
         }
     }
 
+    pub fn is_bv(&self) -> bool {
+        match self {
+            TermTypeX::Base(BaseType::BitVec(..)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_int_or_bv(&self) -> bool {
+        match self {
+            TermTypeX::Base(BaseType::Int) => true,
+            TermTypeX::Base(BaseType::BitVec(..)) => true,
+            _ => false,
+        }
+    }
+
     pub fn is_bool(&self) -> bool {
         match self {
             TermTypeX::Base(BaseType::Bool) => true,
@@ -488,6 +510,22 @@ impl TermX {
                     None
                 }
             }
+            TermX::BVAdd(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        term.borrow().span,
+                        TermX::BVAdd(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
             TermX::Mul(t1, t2) => {
                 let t1_subst = Self::substitute_inplace(t1, subst);
                 let t2_subst = Self::substitute_inplace(t2, subst);
@@ -496,6 +534,22 @@ impl TermX {
                     Some(Spanned::spanned_option(
                         term.borrow().span,
                         TermX::Mul(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
+            TermX::BVMul(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        term.borrow().span,
+                        TermX::BVMul(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
                         ),
@@ -528,6 +582,38 @@ impl TermX {
                     Some(Spanned::spanned_option(
                         term.borrow().span,
                         TermX::Less(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
+            TermX::BVULT(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        term.borrow().span,
+                        TermX::BVULT(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
+            TermX::BVSLT(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        term.borrow().span,
+                        TermX::BVSLT(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
                         ),
@@ -578,7 +664,15 @@ impl TermX {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
+            TermX::BVAdd(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
             TermX::Mul(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::BVMul(t1, t2) => {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
@@ -587,6 +681,14 @@ impl TermX {
                 t2.free_vars_inplace(vars);
             }
             TermX::Less(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::BVULT(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
+            TermX::BVSLT(t1, t2) => {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
@@ -616,9 +718,13 @@ impl TermX {
             TermX::BitVec(..) => 0,
             TermX::Ref(..) => 0,
             TermX::Add(..) => 2,
+            TermX::BVAdd(..) => 2,
             TermX::Mul(..) => 1,
+            TermX::BVMul(..) => 1,
             TermX::And(..) => 5,
             TermX::Less(..) => 3,
+            TermX::BVULT(..) => 3,
+            TermX::BVSLT(..) => 3,
             TermX::Equal(..) => 3,
             TermX::Not(..) => 4,
         }
@@ -1213,6 +1319,19 @@ impl fmt::Display for TermX {
                 }
                 Ok(())
             }
+            TermX::BVAdd(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " +bv {}", t2)?;
+                } else {
+                    write!(f, " +bv ({})", t2)?;
+                }
+                Ok(())
+            }
             TermX::Mul(t1, t2) => {
                 if t1.precedence() <= self.precedence() {
                     write!(f, "{}", t1)?;
@@ -1223,6 +1342,19 @@ impl fmt::Display for TermX {
                     write!(f, " * {}", t2)?;
                 } else {
                     write!(f, " * ({})", t2)?;
+                }
+                Ok(())
+            }
+            TermX::BVMul(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " *bv {}", t2)?;
+                } else {
+                    write!(f, " *bv ({})", t2)?;
                 }
                 Ok(())
             }
@@ -1249,6 +1381,32 @@ impl fmt::Display for TermX {
                     write!(f, " < {}", t2)?;
                 } else {
                     write!(f, " < ({})", t2)?;
+                }
+                Ok(())
+            }
+            TermX::BVULT(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " u< {}", t2)?;
+                } else {
+                    write!(f, " u< ({})", t2)?;
+                }
+                Ok(())
+            }
+            TermX::BVSLT(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " s< {}", t2)?;
+                } else {
+                    write!(f, " s< ({})", t2)?;
                 }
                 Ok(())
             }

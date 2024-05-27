@@ -125,14 +125,22 @@ Term: Term = {
     #[precedence(level = "1")]
     #[assoc(side="left")]
     <start:@L> <t1:Term> "*" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Mul(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "*bv" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVMul(t1, t2)),
 
     #[precedence(level = "2")]
     #[assoc(side="left")]
     <start:@L> <t1:Term> "+" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Add(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "+bv" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVAdd(t1, t2)),
 
     #[precedence(level = "3")]
     #[assoc(side="left")]
     <start:@L> <t1:Term> "<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Less(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "u<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVULT(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "s<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVSLT(t1, t2)),
     #[assoc(side="left")]
     <start:@L> <t1:Term> "=" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Equal(t1, t2)),
 

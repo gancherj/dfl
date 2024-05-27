@@ -107,7 +107,27 @@ impl TermX {
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,
             )),
+            TermX::BVAdd(t1, t2) => Ok(smt::TermX::bvadd(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
             TermX::Mul(t1, t2) => Ok(smt::TermX::mul(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
+            TermX::BVMul(t1, t2) => Ok(smt::TermX::bvmul(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
+            TermX::Less(t1, t2) => Ok(smt::TermX::lt(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
+            TermX::BVULT(t1, t2) => Ok(smt::TermX::bvult(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
+            TermX::BVSLT(t1, t2) => Ok(smt::TermX::bvslt(
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,
             )),
@@ -115,10 +135,6 @@ impl TermX {
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,
             ])),
-            TermX::Less(t1, t2) => Ok(smt::TermX::lt(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
-            )),
             TermX::Equal(t1, t2) => Ok(smt::TermX::eq(
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,

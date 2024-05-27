@@ -477,7 +477,16 @@ impl TermX {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;
                 if typ1 == typ2 && typ1.is_int() {
-                    Ok(TermTypeX::int())
+                    Ok(typ1.clone())
+                } else {
+                    Error::spanned_err(term.span, format!("incorrect subterm type"))
+                }
+            }
+            TermX::BVAdd(t1, t2) | TermX::BVMul(t1, t2) => {
+                let typ1 = TermX::type_check(t1, ctx, local)?;
+                let typ2 = TermX::type_check(t2, ctx, local)?;
+                if typ1 == typ2 && typ1.is_bv() {
+                    Ok(typ1.clone())
                 } else {
                     Error::spanned_err(term.span, format!("incorrect subterm type"))
                 }
@@ -486,6 +495,15 @@ impl TermX {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;
                 if typ1 == typ2 && typ1.is_int() {
+                    Ok(TermTypeX::bool())
+                } else {
+                    Error::spanned_err(term.span, format!("incorrect subterm type"))
+                }
+            }
+            TermX::BVULT(t1, t2) | TermX::BVSLT(t1, t2) => {
+                let typ1 = TermX::type_check(t1, ctx, local)?;
+                let typ2 = TermX::type_check(t2, ctx, local)?;
+                if typ1 == typ2 && typ1.is_bv() {
                     Ok(TermTypeX::bool())
                 } else {
                     Error::spanned_err(term.span, format!("incorrect subterm type"))

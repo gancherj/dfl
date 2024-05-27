@@ -290,6 +290,14 @@ impl TermX {
         ))
     }
 
+    pub fn bvadd(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvadd", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvmul(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvmul", [a.borrow(), b.borrow()])
+    }
+
     pub fn add(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("+", [a.borrow(), b.borrow()])
     }
@@ -326,6 +334,14 @@ impl TermX {
 
     pub fn eq(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("=", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvult(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvult", [a.borrow(), b.borrow()])
+    }
+    
+    pub fn bvslt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvslt", [a.borrow(), b.borrow()])
     }
 
     pub fn lt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
