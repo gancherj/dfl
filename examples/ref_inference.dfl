@@ -7,23 +7,23 @@ chan C2: &A[*..*]
 chan C3: &{A[*..*][2], B}
 chan C4: &A
 
-proc test1 | out C1, out C2, out C3 =
+proc test1() | out C1, out C2, out C3 =
     send &A[1..5] -> C1
     send &A[2..4] -> C2
     send &A[2..4][2] -> C3
 
 perm P2()
-proc test2 | P2(), in C1 =
+proc test2() | P2(), in C1 =
     recv r <- C1
     write 0 -> *r[2]
 
 perm P3()
-proc test3 | P3(), in C3 =
+proc test3() | P3(), in C3 =
     recv r <- C3
     write 0 -> *r
     write 0 -> B
 
 perm P4()
-proc test4 | P4(), in C1, in C4 =
+proc test4() | P4(), in C1, in C4 =
     recv r <- C4
-    (test2 || write 0 -> *r[1])
+    (test2() || write 0 -> *r[1])

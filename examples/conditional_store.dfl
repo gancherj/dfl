@@ -12,52 +12,52 @@ chan MergeDecider: bool
 chan Steer1D: bool | if Steer1D then write A else empty end
 chan Steer2D: bool | if not Steer2D then write A else empty end
 
-proc Merge | in MergeDecider, in Merge1, in Merge2, out LdSync =
+proc Merge() | in MergeDecider, in Merge1, in Merge2, out LdSync =
     recv d <- MergeDecider
     if d then
         recv x <- Merge1
         send x -> LdSync
-        Merge
+        Merge()
     else
         recv x <- Merge2
         send x -> LdSync
-        Merge
+        Merge()
     end
 
-proc Ld | in LdSync, out MergeDecider, out Steer1D, out Steer2D =
+proc Ld() | in LdSync, out MergeDecider, out Steer1D, out Steer2D =
     recv _ <- LdSync
     read x <- A
     send x -> MergeDecider
     send x -> Steer1D
     send x -> Steer2D
-    Ld
+    Ld()
 
-proc Steer1 | in Steer1D, out St1Sync =
+proc Steer1() | in Steer1D, out St1Sync =
     recv d <- Steer1D
     if d then
         send true -> St1Sync
-        Steer1
+        Steer1()
     else
-        Steer1
+        Steer1()
     end
 
-proc Steer2 | in Steer2D, out St2Sync =
+proc Steer2() | in Steer2D, out St2Sync =
     recv d <- Steer2D
     if not d then
         send true -> St2Sync
-        Steer2
+        Steer2()
     else
-        Steer2
+        Steer2()
     end
 
-proc St1 | in St1Sync, out Merge1 =
+proc St1() | in St1Sync, out Merge1 =
     recv _ <- St1Sync
     write false -> A
     send true -> Merge1
-    St1
+    St1()
 
-proc St2 | in St2Sync, out Merge2 =
+proc St2() | in St2Sync, out Merge2 =
     recv _ <- St2Sync
     write true -> A
     send true -> Merge2
-    St2
+    St2()

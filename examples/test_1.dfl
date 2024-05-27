@@ -26,68 +26,68 @@ chan C10: int | PV_C10(C10)
 perm PV_C11(int)
 chan C11: int | PV_C11(C11)
 
-proc CarryI0 | in C0, in C1, in C2, out C4, out C10 =
+proc CarryI0() | in C0, in C1, in C2, out C4, out C10 =
   recv a <- C1
   send a -> C4
   send a -> C10
-  CarryS0
+  CarryS0()
 
-proc CarryS0 | in C0, in C1, in C2, out C4, out C10 =
+proc CarryS0() | in C0, in C1, in C2, out C4, out C10 =
   recv d <- C0
   if not (d = 0) then
     recv b <- C2
     send b -> C4
     send b -> C10
-    CarryS0
+    CarryS0()
   else
-    CarryI0
+    CarryI0()
   end
 
-proc Steer1 | in C3, in C4, out C5, out C8, out C9 =
+proc Steer1() | in C3, in C4, out C5, out C8, out C9 =
   recv d <- C3
   recv a <- C4
   if not (d = 0) then
     send a -> C5
     send a -> C8
     send a -> C9
-    Steer1
+    Steer1()
   else
-    Steer1
+    Steer1()
   end
 
-proc Add2 | in C5, in C6, out C2 =
+proc Add2() | in C5, in C6, out C2 =
   recv a <- C5
   send a + 1 -> C2
-  Add2
+  Add2()
 
-proc Store3 | in C7, in C8, in C9 =
+proc Store3() | in C7, in C8, in C9 =
   recv index <- C8
   recv value <- C9
   write value -> A[index]
-  Store3
+  Store3()
 
-proc Ult4 | in C10, in C11, out C0, out C3 =
+proc Ult4() | in C10, in C11, out C0, out C3 =
   recv a <- C10
   recv b <- C11
   if a < b then
     send 1 -> C0
     send 1 -> C3
-    Ult4
+    Ult4()
   else
     send 0 -> C0
     send 0 -> C3
-    Ult4
+    Ult4()
   end
 
-proc Hold6 | out C6 =
+proc Hold6() | out C6 =
   send 1 -> C6
-  Hold6
+  Hold6()
 
-proc Hold11 | out C11 =
+proc Hold11() | out C11 =
   send len -> C11
-  Hold11
+  Hold11()
 
-proc Program | all = CarryI0 || Steer1 || Add2 || Store3 || Ult4 ||
-  Hold6 ||
-  Hold11 ||
+proc Program() | all = CarryI0() || Steer1() || Add2() || Store3() || Ult4() ||
+  Hold6() ||
+  Hold11() ||
   send 0 -> C1
