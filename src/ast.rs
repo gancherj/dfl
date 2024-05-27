@@ -91,11 +91,13 @@ pub enum PermissionX {
     Var(PermVar, Vec<Term>),
 }
 
+pub type BitVecWidth = u32;
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum BaseType {
     Bool,
     Int,
-    BitVec(u32),
+    BitVec(BitVecWidth),
 }
 
 pub type TermType = Rc<TermTypeX>;
@@ -119,6 +121,7 @@ pub enum TermX {
     Const(Const),
     Bool(bool),
     Int(i64),
+    BitVec(u64, BitVecWidth),
 
     Ref(MutReference),
 
@@ -424,6 +427,10 @@ impl TermTypeX {
         Rc::new(TermTypeX::Base(BaseType::Int))
     }
 
+    pub fn bit_vec(w: BitVecWidth) -> TermType {
+        Rc::new(TermTypeX::Base(BaseType::BitVec(w)))
+    }
+
     pub fn bool() -> TermType {
         Rc::new(TermTypeX::Base(BaseType::Bool))
     }
@@ -453,6 +460,7 @@ impl TermX {
             TermX::Const(..) => None,
             TermX::Bool(..) => None,
             TermX::Int(..) => None,
+            TermX::BitVec(..) => None,
             TermX::Ref(m) => {
                 let m_subst = MutReferenceX::substitute_inplace(m, subst);
                 if m_subst.is_some() {
@@ -562,6 +570,7 @@ impl TermX {
             TermX::Const(..) => {}
             TermX::Bool(..) => {}
             TermX::Int(..) => {}
+            TermX::BitVec(..) => {}
             TermX::Ref(m) => {
                 m.free_vars_inplace(vars);
             }
@@ -604,6 +613,7 @@ impl TermX {
             TermX::Const(..) => 0,
             TermX::Bool(..) => 0,
             TermX::Int(..) => 0,
+            TermX::BitVec(..) => 0,
             TermX::Ref(..) => 0,
             TermX::Add(..) => 2,
             TermX::Mul(..) => 1,
@@ -1188,6 +1198,7 @@ impl fmt::Display for TermX {
             TermX::Const(c) => write!(f, "{}", c),
             TermX::Bool(b) => write!(f, "{}", b),
             TermX::Int(i) => write!(f, "{}", i),
+            TermX::BitVec(i, w) => write!(f, "{}bv{}", i, w),
             TermX::Ref(m) => write!(f, "&{}", m),
             TermX::Add(t1, t2) => {
                 if t1.precedence() <= self.precedence() {

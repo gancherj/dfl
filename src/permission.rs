@@ -101,6 +101,7 @@ impl TermX {
                     Ok(smt::TermX::neg(smt::TermX::int(-i as u64)))
                 }
             }
+            TermX::BitVec(i, w) => Ok(smt::TermX::bit_vec(*i, *w)),
             TermX::Ref(..) => unimplemented!("reference"),
             TermX::Add(t1, t2) => Ok(smt::TermX::add(
                 TermX::as_smt_term(t1, interp)?,

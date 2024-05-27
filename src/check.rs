@@ -465,13 +465,14 @@ impl TermX {
                     term.span,
                     format!("constant `{}` not defined", c),
                 )),
+            TermX::Bool(_) => Ok(TermTypeX::bool()),
+            TermX::Int(_) => Ok(TermTypeX::int()),
+            TermX::BitVec(_, w) => Ok(TermTypeX::bit_vec(*w)),
             TermX::Ref(m) => {
                 MutReferenceX::type_check(m, ctx, local)?;
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
                 Ok(Rc::new(TermTypeX::Ref(refs)))
             }
-            TermX::Bool(_) => Ok(TermTypeX::bool()),
-            TermX::Int(_) => Ok(TermTypeX::int()),
             TermX::Add(t1, t2) | TermX::Mul(t1, t2) => {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;

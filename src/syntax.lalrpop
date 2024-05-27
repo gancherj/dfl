@@ -37,6 +37,12 @@ Int: i64 = {
     UnsignedInt => <>.into(),
     "-?[1-9][0-9]*" => i64::from_str(<>).unwrap(),
 }
+BV: (u64, BitVecWidth) = {
+    r"(0|[1-9][0-9]*)bv[1-9][0-9]*" => {
+        let lex: Vec<_> = <>.split("bv").collect();
+        (u64::from_str(lex[0]).unwrap(), BitVecWidth::from_str(lex[1]).unwrap())
+    }
+}
 Var: Var = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 Const: Const = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 ChanName: ChanName = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
@@ -47,7 +53,7 @@ PermVar: PermVar = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 BaseType: BaseType = {
     "bool" => BaseType::Bool,
     "int" => BaseType::Int,
-    r"bv[1-9][0-9]*" => BaseType::BitVec(u32::from_str(&<>[2..]).unwrap()),
+    r"bv[1-9][0-9]*" => BaseType::BitVec(BitVecWidth::from_str(&<>[2..]).unwrap()),
 }
 
 TermType: TermType = {
@@ -105,9 +111,10 @@ Permission: Permission = {
 
 TermReset = <Term>;
 AtomicTerm: Term = {
-    <start:@L> <v: Var> <end:@R> => Spanned::spanned(start, end, TermX::Var(v)), // Both variables and constants are parsed as variables first, and constants are then converted later
-    <start:@L> <b: Bool> <end:@R> => Spanned::spanned(start, end, TermX::Bool(b)),
+    <start:@L> <v:Var> <end:@R> => Spanned::spanned(start, end, TermX::Var(v)), // Both variables and constants are parsed as variables first, and constants are then converted later
+    <start:@L> <b:Bool> <end:@R> => Spanned::spanned(start, end, TermX::Bool(b)),
     <start:@L> <i:Int> <end:@R> => Spanned::spanned(start, end, TermX::Int(i)),
+    <start:@L> <i:BV> <end:@R> => Spanned::spanned(start, end, TermX::BitVec(i.0, i.1)),
     "(" <t:TermReset> ")" => t,
 }
 Term: Term = {

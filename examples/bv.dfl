@@ -1,0 +1,4 @@
+mut A: [bv32]
+
+proc test | write A =
+    write 1bv32 -> A[0]

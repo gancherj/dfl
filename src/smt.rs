@@ -10,11 +10,13 @@ use std::rc::Rc;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
+use crate::BitVecWidth;
+
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Sort {
     Int,
     Bool,
-    BitVec(u32),
+    BitVec(BitVecWidth),
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -37,6 +39,7 @@ pub type Term = Rc<TermX>;
 pub enum TermX {
     Var(Ident),
     Int(u64),
+    BitVec(u64, BitVecWidth),
     Bool(bool),
     App(Term, Vec<Term>),
     Quant(QuantKind, Vec<SortedVar>, Term),
@@ -260,6 +263,10 @@ impl TermX {
 
     pub fn bool(b: bool) -> Term {
         Rc::new(TermX::Bool(b))
+    }
+
+    pub fn bit_vec(i: u64, w: BitVecWidth) -> Term {
+        Rc::new(TermX::BitVec(i, w))
     }
 
     pub fn var(id: impl Into<Ident>) -> Term {
@@ -666,6 +673,7 @@ impl fmt::Display for TermX {
         match self {
             TermX::Var(v) => write!(f, "{}", v),
             TermX::Int(i) => write!(f, "{}", i),
+            TermX::BitVec(i, w) => write!(f, "(_ bv{} {})", i, w),
             TermX::Bool(b) => write!(f, "{}", b),
             TermX::App(id, args) => {
                 write!(f, "({}", id)?;
