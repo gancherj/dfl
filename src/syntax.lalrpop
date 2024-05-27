@@ -10,6 +10,8 @@ match {
     r"\s*" => {}, // The default whitespace skipping is disabled if an `ignore pattern` is specified
     r"//[^\n\r]*[\n\r]*" => {}, // Skip `// comments`
     r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => {},  // Skip `/* comments */`
+    r"bv[1-9][0-9]*",
+} else {
     _
 }
 
@@ -45,6 +47,7 @@ PermVar: PermVar = { r"[a-zA-Z_][a-zA-Z0-9_']*" => <>.into() }
 BaseType: BaseType = {
     "bool" => BaseType::Bool,
     "int" => BaseType::Int,
+    r"bv[1-9][0-9]*" => BaseType::BitVec(u32::from_str(&<>[2..]).unwrap()),
 }
 
 TermType: TermType = {
@@ -137,12 +140,11 @@ Term: Term = {
 ProcReset = <Proc>;
 Proc: Proc = {
     #[precedence(level = "0")]
-    <start:@L> "skip" <end:@R> => Spanned::spanned(start, end, ProcX::Skip),
-    <start:@L> "send" <t:Term> "->" <c:ChanName> <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "recv" <x:Var> "<-" <c:ChanName> <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "write" <t:Term> "->" <m:MutReference> <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "read" <x:Var> "<-" <m:MutReference> <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "debug" <k:Proc?> <end:@R> => Spanned::spanned(start, end, ProcX::Debug(k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "skip" ";"? <end:@R> => Spanned::spanned(start, end, ProcX::Skip),
+    <start:@L> "send" <t:Term> "->" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "recv" <x:Var> "<-" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "write" <t:Term> "->" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "read" <x:Var> "<-" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
 
     <start:@L> "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" <end:@R> => Spanned::spanned(start, end, ProcX::Ite(t, k1, k2)),
     <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Skip))),

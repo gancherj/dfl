@@ -64,6 +64,7 @@ impl BaseType {
         match self {
             BaseType::Bool => smt::Sort::Bool,
             BaseType::Int => smt::Sort::Int,
+            BaseType::BitVec(w) => smt::Sort::BitVec(*w),
         }
     }
 }

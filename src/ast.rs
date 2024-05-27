@@ -95,6 +95,7 @@ pub enum PermissionX {
 pub enum BaseType {
     Bool,
     Int,
+    BitVec(u32),
 }
 
 pub type TermType = Rc<TermTypeX>;
@@ -1137,11 +1138,7 @@ impl fmt::Display for BaseType {
         match self {
             BaseType::Bool => write!(f, "bool"),
             BaseType::Int => write!(f, "int"),
-            // BaseType::Ref(ns, level) => if ns.len() == 1 {
-            //     write!(f, "&{}{}", ns[0], "[*]".repeat(*level))
-            // } else {
-            //     write!(f, "&{{{}}}{}", ns.iter().map(|n| n.0.as_ref()).collect::<Vec<&str>>().join(", "), "[*]".repeat(*level))
-            // }
+            BaseType::BitVec(width) => write!(f, "bv{}", width)
         }
     }
 }
