@@ -1,17 +1,18 @@
-use std::fs;
+use std::{fs, io::BufReader};
 
 pub mod ast;
 pub mod check;
 pub mod permission;
 pub mod smt;
 pub mod span;
+pub mod riptide;
 
-use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions};
+use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
 
 use clap::{command, Parser};
 use lalrpop_util::{lalrpop_mod, ParseError};
 
-lalrpop_mod!(pub dfl);
+lalrpop_mod!(pub syntax);
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -76,35 +77,15 @@ fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
 }
 
 fn main() {
-    // let mut solver = smt::Solver::new("z3", &["-in"]).expect("failed to create solver");
-
-    // solver.send_command(smt::CommandX::declare_const("a", smt::Sort::Int))
-    //     .expect("failed to send command");
-
-    // solver.send_command(smt::CommandX::assert(smt::TermX::lt(
-    //     smt::TermX::var("a"),
-    //     smt::TermX::int(0),
-    // ))).unwrap();
-
-    // solver.send_command(smt::CommandX::assert(smt::TermX::lt(
-    //     smt::TermX::int(0),
-    //     smt::TermX::var("a"),
-    // ))).unwrap();
-
-    // println!("check-sat result: {}", solver.check_sat().unwrap());
-
-    // let result = solver.send_command_with_output(smt::CommandX::get_model())
-    //     .expect("failed to send command");
-
-    // println!("get-model result: {}", result);
-
-    // solver.close().unwrap();
-
+    // let o2p_file = fs::File::open("/Users/zhengyao/work/riptide-verification/examples/test-1/test-1.o2p").unwrap();
+    // let reader = BufReader::new(o2p_file);
+    // println!("parsed: {:?}", Graph::from_reader(reader));
+    
     let args = Args::parse();
 
     let path = &args.source;
     let src = fs::read_to_string(path).expect("failed to read input file");
-    let parsed = dfl::ProgramParser::new().parse(&src);
+    let parsed = syntax::ProgramParser::new().parse(&src);
 
     match parsed {
         Ok(program) => {
