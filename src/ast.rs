@@ -55,7 +55,8 @@ pub enum PermFraction {
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum MutReferenceIndex {
-    Const(i64),
+    Int(i64),
+    BitVec(u64, BitVecWidth),
     Unknown,
 }
 
@@ -111,7 +112,7 @@ pub type MutType = Rc<MutTypeX>;
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum MutTypeX {
     Base(BaseType),
-    Array(MutType),
+    Array(BaseType, MutType),
 }
 
 pub type Term = RcSpanned<TermX>;
@@ -404,6 +405,22 @@ impl Ctx {
     }
 }
 
+impl BaseType {
+    pub fn is_int(&self) -> bool {
+        match self {
+            BaseType::Int => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_bv(&self) -> bool {
+        match self {
+            BaseType::BitVec(..) => true,
+            _ => false,
+        }
+    }
+}
+
 impl TermTypeX {
     pub fn is_int(&self) -> bool {
         match self {
@@ -441,6 +458,13 @@ impl TermTypeX {
         }
     }
 
+    pub fn is_base(&self, typ: &BaseType) -> bool {
+        match self {
+            TermTypeX::Base(base) => base == typ,
+            _ => false,
+        }
+    }
+
     pub fn base(typ: &BaseType) -> TermType {
         Rc::new(TermTypeX::Base(typ.clone()))
     }
@@ -465,6 +489,10 @@ impl TermX {
 
     pub fn int(i: i64) -> Term {
         Spanned::new(TermX::Int(i))
+    }
+
+    pub fn bit_vec(i: u64, w: BitVecWidth) -> Term {
+        Spanned::new(TermX::BitVec(i, w))
     }
 
     pub fn constant(c: impl Into<Const>) -> Term {
@@ -732,31 +760,10 @@ impl TermX {
 }
 
 impl MutTypeX {
-    /// get_deref_type([[int]], 0) = [[int]]
-    /// get_deref_type([[int]], 1) = [int]
-    /// get_deref_type([[int]], 3) = None
-    pub fn get_deref_type(typ: &MutType, level: usize) -> Option<MutType> {
-        if level == 0 {
-            Some(typ.clone())
-        } else {
-            match typ.as_ref() {
-                MutTypeX::Base(..) => None,
-                MutTypeX::Array(t) => MutTypeX::get_deref_type(t, level - 1),
-            }
-        }
-    }
-
-    pub fn get_base_type(&self) -> &BaseType {
-        match self {
-            MutTypeX::Base(t) => t,
-            MutTypeX::Array(t) => t.get_base_type(),
-        }
-    }
-
     pub fn get_dimensions(&self) -> usize {
         match self {
             MutTypeX::Base(..) => 0,
-            MutTypeX::Array(t) => t.get_dimensions() + 1,
+            MutTypeX::Array(_, t) => t.get_dimensions() + 1,
         }
     }
 }
@@ -769,6 +776,16 @@ impl MutReferenceX {
             MutReferenceX::Deref(..) => true,
             MutReferenceX::Index(m, ..) => m.has_deref(),
             MutReferenceX::Slice(m, ..) => m.has_deref(),
+        }
+    }
+
+    /// Get the base mutable name if it exists
+    pub fn get_base_mutable(&self) -> Option<MutName> {
+        match self {
+            MutReferenceX::Base(n) => Some(n.clone()),
+            MutReferenceX::Deref(..) => None,
+            MutReferenceX::Index(m, ..) => m.get_base_mutable(),
+            MutReferenceX::Slice(m, ..) => m.get_base_mutable(),
         }
     }
 
@@ -1292,7 +1309,7 @@ impl fmt::Display for MutTypeX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MutTypeX::Base(base) => write!(f, "{}", base),
-            MutTypeX::Array(base) => write!(f, "[{}]", base),
+            MutTypeX::Array(index, base) => write!(f, "array({}, {})", index, base),
         }
     }
 }
@@ -1447,7 +1464,8 @@ impl fmt::Display for PermFraction {
 impl fmt::Display for MutReferenceIndex {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            MutReferenceIndex::Const(i) => write!(f, "{}", i),
+            MutReferenceIndex::Int(i) => write!(f, "{}", i),
+            MutReferenceIndex::BitVec(i, w) => write!(f, "{}bv{}", i, w),
             MutReferenceIndex::Unknown => write!(f, "*"),
         }
     }

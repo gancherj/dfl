@@ -37,7 +37,7 @@ Int: i64 = {
     UnsignedInt => <>.into(),
     "-?[1-9][0-9]*" => i64::from_str(<>).unwrap(),
 }
-BV: (u64, BitVecWidth) = {
+BitVec: (u64, BitVecWidth) = {
     r"(0|[1-9][0-9]*)bv[1-9][0-9]*" => {
         let lex: Vec<_> = <>.split("bv").collect();
         (u64::from_str(lex[0]).unwrap(), BitVecWidth::from_str(lex[1]).unwrap())
@@ -64,7 +64,8 @@ TermType: TermType = {
 
 MutType: MutType = {
     <t:BaseType> => Rc::new(MutTypeX::Base(t)),
-    "[" <t:MutType> "]" => Rc::new(MutTypeX::Array(t)),
+    "[" <t:MutType> "]" => Rc::new(MutTypeX::Array(BaseType::Int, t)),
+    "array" "(" <i:BaseType> "," <t:MutType> ")" => Rc::new(MutTypeX::Array(i, t)),
 }
 
 ProcParam: ProcParam = {
@@ -79,7 +80,8 @@ PermFraction: PermFraction = {
 
 MutReferenceIndex: MutReferenceIndex = {
     "*" => MutReferenceIndex::Unknown,
-    UnsignedInt => MutReferenceIndex::Const(<> as i64),
+    UnsignedInt => MutReferenceIndex::Int(<> as i64),
+    BitVec => MutReferenceIndex::BitVec(<>.0, <>.1),
 }
 
 MutReferenceType: MutReferenceType = {
@@ -114,7 +116,7 @@ AtomicTerm: Term = {
     <start:@L> <v:Var> <end:@R> => Spanned::spanned(start, end, TermX::Var(v)), // Both variables and constants are parsed as variables first, and constants are then converted later
     <start:@L> <b:Bool> <end:@R> => Spanned::spanned(start, end, TermX::Bool(b)),
     <start:@L> <i:Int> <end:@R> => Spanned::spanned(start, end, TermX::Int(i)),
-    <start:@L> <i:BV> <end:@R> => Spanned::spanned(start, end, TermX::BitVec(i.0, i.1)),
+    <start:@L> <i:BitVec> <end:@R> => Spanned::spanned(start, end, TermX::BitVec(i.0, i.1)),
     "(" <t:TermReset> ")" => t,
 }
 Term: Term = {

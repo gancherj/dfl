@@ -42,8 +42,10 @@ pub struct Interpretation {
     vars: IndexMap<Var, smt::Term>,
     perms: IndexMap<PermVar, smt::Term>,
     mut_idx: smt::Term,
-    arr_indices: Vec<smt::Term>,
     frac_idx: smt::Term,
+
+    /// mutable |-> (base type, index variable)
+    arr_indices: IndexMap<MutName, Vec<(BaseType, smt::Term)>>,
 
     /// Additional constraints for the free variables
     constraints: Vec<smt::Term>,
@@ -193,7 +195,7 @@ impl PermissionX {
                     interp,
                     mut_ref,
                     &mut conditions,
-                    &mut smt::TermX::int(0),
+                    &mut None,
                     &mut 0,
                 )?;
 
@@ -217,8 +219,8 @@ impl PermissionX {
                         // .chain(interp.consts.values())
                         // .chain(interp.vars.values())
                         .chain([&interp.mut_idx])
-                        .chain(&interp.arr_indices)
-                        .chain([&interp.frac_idx]),
+                        .chain([&interp.frac_idx])
+                        .chain(interp.arr_indices.values().flatten().map(|t| &t.1)),
                 ))
             } // Error::spanned_err(perm.span, format!("permission variable not supported for SMT encoding"))
         }
@@ -232,7 +234,7 @@ impl PermissionX {
         interp: &Interpretation,
         mut_ref: &MutReference,
         conditions: &mut Vec<smt::Term>,
-        current_base: &mut smt::Term,
+        current_base: &mut Option<smt::Term>,
         current_idx: &mut usize,
     ) -> Result<(), Error> {
         match &mut_ref.x {
@@ -248,7 +250,7 @@ impl PermissionX {
                     smt::TermX::int(base_mut_idx as u64),
                 ));
 
-                *current_base = smt::TermX::int(0);
+                *current_base = None;
                 *current_idx = 0;
             }
             MutReferenceX::Deref(..) => unimplemented!("deref in permission"),
@@ -262,13 +264,35 @@ impl PermissionX {
                     current_idx,
                 )?;
 
-                conditions.push(smt::TermX::eq(
-                    &interp.arr_indices[*current_idx],
-                    smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, interp)?),
-                ));
+                let mut_name = &mut_ref.get_base_mutable().ok_or(Error::spanned(
+                    mut_ref.span,
+                    format!("deref should not occur in permissions"),
+                ))?;
+
+                let (base, arr_idx) = &interp.arr_indices[mut_name][*current_idx];
+
+                if base.is_int() {
+                    conditions.push(smt::TermX::eq(
+                        arr_idx,
+                        if let Some(current_base) = current_base {
+                            smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, interp)?)
+                        } else {
+                            TermX::as_smt_term(t, interp)?
+                        },
+                    ));
+                } else {
+                    conditions.push(smt::TermX::eq(
+                        arr_idx,
+                        if let Some(current_base) = current_base {
+                            smt::TermX::bvadd(current_base.clone(), TermX::as_smt_term(t, interp)?)
+                        } else {
+                            TermX::as_smt_term(t, interp)?
+                        },
+                    ));
+                }
 
                 // Move on to the next index
-                *current_base = smt::TermX::int(0);
+                *current_base = None;
                 *current_idx += 1;
             }
             MutReferenceX::Slice(mut_ref, t1, t2) => {
@@ -281,19 +305,46 @@ impl PermissionX {
                     current_idx,
                 )?;
 
+                let mut_name = &mut_ref.get_base_mutable().ok_or(Error::spanned(
+                    mut_ref.span,
+                    format!("deref should not occur in permissions"),
+                ))?;
+
+                let (base, arr_idx) = &interp.arr_indices[mut_name][*current_idx];
+
                 // t1 <= idx
                 if let Some(t1) = t1 {
                     let t1_smt = TermX::as_smt_term(t1, interp)?;
-                    conditions.push(smt::TermX::le(&t1_smt, &interp.arr_indices[*current_idx]));
-                    *current_base = smt::TermX::add(current_base.clone(), t1_smt);
+                    if base.is_int() {
+                        conditions.push(smt::TermX::le(&t1_smt, arr_idx));
+                        *current_base = if let Some(current_base) = current_base {
+                            Some(smt::TermX::add(current_base.clone(), t1_smt))
+                        } else {
+                            Some(t1_smt)
+                        }
+                    } else {
+                        conditions.push(smt::TermX::bvule(&t1_smt, arr_idx));
+                        *current_base = if let Some(current_base) = current_base {
+                            Some(smt::TermX::bvadd(current_base.clone(), t1_smt))
+                        } else {
+                            Some(t1_smt)
+                        }
+                    }
                 }
 
                 // idx < t2
                 if let Some(t2) = t2 {
-                    conditions.push(smt::TermX::lt(
-                        &interp.arr_indices[*current_idx],
-                        TermX::as_smt_term(t2, interp)?,
-                    ));
+                    if base.is_int() {
+                        conditions.push(smt::TermX::lt(
+                            arr_idx,
+                            TermX::as_smt_term(t2, interp)?,
+                        ));
+                    } else {
+                        conditions.push(smt::TermX::bvult(
+                            arr_idx,
+                            TermX::as_smt_term(t2, interp)?,
+                        ));
+                    }
                 }
             }
         }
@@ -465,21 +516,32 @@ impl Interpretation {
             }
         };
 
-        let max_dim = ctx.max_mut_dim();
+        let mut arr_indices = IndexMap::new();
+
+        // For each mutable, initialize fresh array index variables
+        for (mut_name, decl) in &ctx.muts {
+            arr_indices.insert(mut_name.clone(), Vec::new());
+
+            let mut mut_type = decl.typ.borrow();
+            loop {
+                match mut_type {
+                    MutTypeX::Base(..) => break,
+                    MutTypeX::Array(t1, t2) => {
+                        arr_indices[mut_name].push((t1.clone(), smt::TermX::var(fresh_universal_var("arr_idx".to_string(), t1.as_smt_sort()))));
+                        mut_type = t2.borrow();
+                    }
+                }
+            }
+            arr_indices[mut_name].reverse();
+        }
+
         let mut interp = Interpretation {
             consts: IndexMap::new(),
             vars: IndexMap::new(),
             perms: IndexMap::new(),
             mut_idx: smt::TermX::var(fresh_universal_var("mut_idx".to_string(), smt::Sort::Int)),
-
-            // Create max_dim many indices
-            arr_indices: (0..max_dim)
-                .map(|_| {
-                    smt::TermX::var(fresh_universal_var("arr_idx".to_string(), smt::Sort::Int))
-                })
-                .collect(),
-
             frac_idx: smt::TermX::var(fresh_universal_var("frac_idx".to_string(), smt::Sort::Int)),
+            arr_indices: arr_indices,
 
             constraints: Vec::new(),
         };
@@ -499,10 +561,14 @@ impl Interpretation {
             .push(smt::TermX::le(smt::TermX::int(0), &interp.frac_idx));
 
         // Set up constraints for array indices
-        for arr_idx in &interp.arr_indices {
-            interp
-                .constraints
-                .push(smt::TermX::le(smt::TermX::int(0), arr_idx));
+        for indices in interp.arr_indices.values() {
+            // If the index is an SMT Int, we require that it is non-negative
+            for (base, index) in indices {
+                if base.is_int() {
+                    interp.constraints
+                        .push(smt::TermX::le(smt::TermX::int(0), index));
+                }
+            }
         }
 
         // Set up constant interpretations
@@ -518,12 +584,20 @@ impl Interpretation {
         if sygus {
             for decl in ctx.perms.values() {
                 // Each permission variable is encoded as a relation
-                // R(x_1, ..., x_n, mut_idx: Int, i_1: Int, ..., i_m: Int, frac_idx: Int)
+                // R(x_1, ..., x_n, mut_idx: Int, frac_idx: Int, i_1: Int, ..., i_m: Int)
                 // where
                 // x_1, ..., x_n are dependent parameter types
                 // mut_idx is the mutable index
-                // i_1, ..., i_m are array indices
                 // frac_idx is the fraction index
+                // i_1, ..., i_m are array indices
+                let arr_indices_names =
+                    interp.arr_indices.values()
+                        .enumerate()
+                        .map(|(i, v)|
+                            // arr_idx_i_j = jth index of the ith mutable
+                           v.iter().enumerate().map(move |(j, (base, _))| (format!("arr_idx_{}_{}", i, j), base.as_smt_sort()))
+                        ).flatten();
+
                 let inputs = decl
                     .param_typs
                     .iter()
@@ -531,17 +605,17 @@ impl Interpretation {
                     .enumerate()
                     .map(|(i, t)| (format!("x{}", i), t))
                     .chain([("mut_idx".to_string(), smt::Sort::Int)])
-                    .chain((0..max_dim).map(|i| (format!("arr_idx{}", i), smt::Sort::Int)))
-                    .chain([("frac_idx".to_string(), smt::Sort::Int)]);
+                    .chain([("frac_idx".to_string(), smt::Sort::Int)])
+                    .chain(arr_indices_names);
 
                 let fresh_rel = smt_ctx.fresh_synth_fun(
                     format!("pv_{}", decl.name),
                     inputs,
                     smt::Sort::Bool,
-                    // None,
-                    Some(&Interpretation::generate_synthsis_grammar(
-                        options, ctx, decl,
-                    )),
+                    None,
+                    // Some(&Interpretation::generate_synthsis_grammar(
+                    //     options, ctx, decl,
+                    // )),
                 );
 
                 interp

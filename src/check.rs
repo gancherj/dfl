@@ -56,11 +56,27 @@ impl BaseType {
     }
 }
 
+impl MutTypeX {
+    pub fn type_check(&self, ctx: &Ctx) -> Result<(), String> {
+        match self {
+            MutTypeX::Base(base) => base.type_check(ctx),
+            MutTypeX::Array(t1, t2) => {
+                if !t1.is_int() && !t1.is_bv() {
+                    Err(format!("type {} cannot be used as index type", t1))
+                } else {
+                    t2.type_check(ctx)
+                }
+            }
+        }
+    }
+}
+
 impl MutReferenceIndex {
     /// Overapproximate a MutReferenceIndex from a term
     pub fn from_term(term: &Term) -> MutReferenceIndex {
         match &term.x {
-            TermX::Int(i) => MutReferenceIndex::Const(*i),
+            TermX::Int(i) => MutReferenceIndex::Int(*i),
+            TermX::BitVec(i, w) => MutReferenceIndex::BitVec(*i, *w),
             _ => MutReferenceIndex::Unknown,
         }
     }
@@ -68,7 +84,32 @@ impl MutReferenceIndex {
     // i <= * for any i: int
     pub fn is_subsumed_by(&self, other: &MutReferenceIndex) -> bool {
         match other {
-            MutReferenceIndex::Const(..) => self == other,
+            MutReferenceIndex::Int(..) => self == other,
+            MutReferenceIndex::BitVec(..) => self == other,
+            MutReferenceIndex::Unknown => true,
+        }
+    }
+
+    pub fn has_base_type(&self, typ: &BaseType) -> bool {
+        match self {
+            MutReferenceIndex::Int(..) => typ.is_int(),
+            MutReferenceIndex::BitVec(..) => typ.is_bv(),
+            MutReferenceIndex::Unknown => true,
+        }
+    }
+
+    pub fn is_int(&self) -> bool {
+        match self {
+            MutReferenceIndex::Int(..) => true,
+            MutReferenceIndex::BitVec(..) => false,
+            MutReferenceIndex::Unknown => true,
+        }
+    }
+
+    pub fn is_bv(&self) -> bool {
+        match self {
+            MutReferenceIndex::Int(..) => false,
+            MutReferenceIndex::BitVec(..) => true,
             MutReferenceIndex::Unknown => true,
         }
     }
@@ -89,18 +130,31 @@ impl MutReferenceTypeX {
                 .typ
                 .clone()),
 
-            MutReferenceTypeX::Index(t, ..) => match t.type_check(ctx)?.borrow() {
-                MutTypeX::Base(..) => Err(format!("cannot index into a base mutable type")),
-                MutTypeX::Array(t) => Ok(t.clone()),
-            },
+            MutReferenceTypeX::Index(t, i) => {
+                match t.type_check(ctx)?.borrow() {
+                    MutTypeX::Base(..) => Err(format!("cannot index into a base mutable type")),
+                    MutTypeX::Array(t1, t2) => {
+                        if !i.has_base_type(t1) {
+                            return Err(format!("incorrect index type"));
+                        }
+                        Ok(t2.clone())
+                    }
+                }
+            }
 
-            MutReferenceTypeX::Slice(t, ..) => {
+            MutReferenceTypeX::Slice(t, i1, i2) => {
                 let typ = t.type_check(ctx)?;
                 match typ.borrow() {
                     MutTypeX::Base(..) => {
                         Err(format!("cannot take the slice of a base mutable type"))
                     }
-                    MutTypeX::Array(..) => Ok(typ.clone()),
+                    MutTypeX::Array(t, ..) => {
+                        if !i1.as_ref().map(|i| i.has_base_type(t)).unwrap_or(false) ||
+                           !i2.as_ref().map(|i| i.has_base_type(t)).unwrap_or(false) {
+                            return Err(format!("incorrect index type"));
+                        }
+                        Ok(typ.clone())
+                    }
                 }
             }
         }
@@ -139,14 +193,15 @@ impl MutReferenceTypeX {
 
     /// * => fresh variable
     /// constant => constant
-    pub fn concretize_index(index: &MutReferenceIndex, local: &mut LocalCtx) -> Term {
+    pub fn concretize_index(index: &MutReferenceIndex, expected: &BaseType, local: &mut LocalCtx) -> Term {
         match index {
-            MutReferenceIndex::Const(i) => TermX::int(*i),
+            MutReferenceIndex::Int(i) => TermX::int(*i),
+            MutReferenceIndex::BitVec(i, w) => TermX::bit_vec(*i, *w),
             MutReferenceIndex::Unknown => {
                 let fresh_var = format!("*{}", local.vars.len());
                 local
                     .vars
-                    .insert(fresh_var.as_str().into(), TermTypeX::int());
+                    .insert(fresh_var.as_str().into(), TermTypeX::base(expected));
                 TermX::var(fresh_var)
             }
         }
@@ -155,18 +210,29 @@ impl MutReferenceTypeX {
     /// Generate a concrete mutable reference
     /// from a mutable reference type
     /// with all unknowns (*) replaced by free variables
-    pub fn concretize(&self, local: &mut LocalCtx) -> MutReference {
+    pub fn concretize(&self, ctx: &Ctx, local: &mut LocalCtx) -> Result<MutReference, String> {
         match self {
-            MutReferenceTypeX::Base(n) => Spanned::new(MutReferenceX::Base(n.clone())),
-            MutReferenceTypeX::Index(m, i) => Spanned::new(MutReferenceX::Index(
-                m.concretize(local),
-                Self::concretize_index(i, local),
-            )),
-            MutReferenceTypeX::Slice(m, i1, i2) => Spanned::new(MutReferenceX::Slice(
-                m.concretize(local),
-                i1.clone().map(|i| Self::concretize_index(&i, local)),
-                i2.clone().map(|i| Self::concretize_index(&i, local)),
-            )),
+            MutReferenceTypeX::Base(n) => Ok(Spanned::new(MutReferenceX::Base(n.clone()))),
+            MutReferenceTypeX::Index(m, i) =>
+                // TODO: This is a bit inefficient, visiting m twice
+                match m.type_check(ctx)?.borrow() {
+                    MutTypeX::Base(..) => unreachable!(),
+                    MutTypeX::Array(index_type, ..) =>
+                        Ok(Spanned::new(MutReferenceX::Index(
+                            m.concretize(ctx, local)?,
+                            Self::concretize_index(i, index_type, local),
+                        ))),
+                }
+            MutReferenceTypeX::Slice(m, i1, i2) =>
+                match m.type_check(ctx)?.borrow() {
+                    MutTypeX::Base(..) => unreachable!(),
+                    MutTypeX::Array(index_type, ..) =>
+                        Ok(Spanned::new(MutReferenceX::Slice(
+                            m.concretize(ctx, local)?,
+                            i1.clone().map(|i| Self::concretize_index(&i, index_type, local)),
+                            i2.clone().map(|i| Self::concretize_index(&i, index_type, local)),
+                        ))),
+                }
         }
     }
 }
@@ -261,42 +327,50 @@ impl MutReferenceX {
                 Ok(mut_type)
             }
             MutReferenceX::Index(m, t) => {
-                if !TermX::type_check(t, ctx, local)?.is_int() {
-                    return Error::spanned_err(
-                        mut_ref.span,
-                        format!("index to a mutable should be int"),
-                    );
-                }
                 match MutReferenceX::type_check(m, ctx, local)?.borrow() {
                     MutTypeX::Base(..) => {
                         Error::spanned_err(mut_ref.span, format!("indexing into base type"))
                     }
-                    MutTypeX::Array(typ) => Ok(typ.clone()),
+                    MutTypeX::Array(index_type, typ) => {
+                        let t_type = TermX::type_check(t, ctx, local)?;
+                        if !t_type.is_base(index_type) {
+                            return Error::spanned_err(
+                                mut_ref.span,
+                                format!("unexpected index type: expecting {}, got {}", index_type, t_type),
+                            );
+                        }
+                        Ok(typ.clone())
+                    },
                 }
             }
             MutReferenceX::Slice(m, t1, t2) => {
-                if let Some(t1) = t1 {
-                    if !TermX::type_check(t1, ctx, local)?.is_int() {
-                        return Error::spanned_err(
-                            mut_ref.span,
-                            format!("index to a mutable should be int"),
-                        );
-                    }
-                }
-                if let Some(t2) = t2 {
-                    if !TermX::type_check(t2, ctx, local)?.is_int() {
-                        return Error::spanned_err(
-                            mut_ref.span,
-                            format!("index to a mutable should be int"),
-                        );
-                    }
-                }
                 let typ = MutReferenceX::type_check(m, ctx, local)?;
                 match typ.borrow() {
                     MutTypeX::Base(..) => {
                         Error::spanned_err(mut_ref.span, format!("slicing into base type"))
                     }
-                    MutTypeX::Array(..) => Ok(typ),
+                    MutTypeX::Array(index_type, ..) => {
+                        if let Some(t1) = t1 {
+                            let t1_type = TermX::type_check(t1, ctx, local)?;
+                            if !t1_type.is_base(index_type) {
+                                return Error::spanned_err(
+                                    mut_ref.span,
+                                    format!("unexpected index type: expecting {}, got {}", index_type, t1_type),
+                                );
+                            }
+                        }
+
+                        if let Some(t2) = t2 {
+                            let t2_type = TermX::type_check(t2, ctx, local)?;
+                            if !t2_type.is_base(index_type) {
+                                return Error::spanned_err(
+                                    mut_ref.span,
+                                    format!("unexpected index type: expecting {}, got {}", index_type, t2_type),
+                                );
+                            }
+                        }
+                        Ok(typ)
+                    },
                 }
             }
         }
@@ -359,7 +433,10 @@ impl MutReferenceX {
                 let (_, base_refs) = typ
                     .get_mut_type(ctx)
                     .map_err(|msg| Error::spanned(mut_ref.span, msg))?;
-                Ok(base_refs.iter().map(|r| r.concretize(local)).collect())
+                Ok(base_refs.iter()
+                    .map(|r| r.concretize(ctx, local))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|msg| Error::spanned(mut_ref.span, msg))?)
             }
             MutReferenceX::Index(m, t) => Ok(Self::concretize(m, ctx, local)?
                 .into_iter()
@@ -926,10 +1003,7 @@ impl Ctx {
 
         // Check mutable types are all non-reference types
         for decl in self.muts.values() {
-            decl.typ
-                .get_base_type()
-                .type_check(self)
-                .map_err(|msg| Error::spanned(decl.span, msg))?;
+            decl.typ.type_check(self).map_err(|msg| Error::spanned(decl.span, msg))?;
         }
 
         // Check channel types

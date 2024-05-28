@@ -339,6 +339,10 @@ impl TermX {
     pub fn bvult(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvult", [a.borrow(), b.borrow()])
     }
+
+    pub fn bvule(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvule", [a.borrow(), b.borrow()])
+    }
     
     pub fn bvslt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvslt", [a.borrow(), b.borrow()])
@@ -689,7 +693,7 @@ impl fmt::Display for TermX {
         match self {
             TermX::Var(v) => write!(f, "{}", v),
             TermX::Int(i) => write!(f, "{}", i),
-            TermX::BitVec(i, w) => write!(f, "(_ bv{} {})", i, w),
+            TermX::BitVec(i, w) => write!(f, "#b{}", (0..64).map(|s| ((i >> s) & 1).to_string()).take(*w as usize).rev().collect::<String>()),
             TermX::Bool(b) => write!(f, "{}", b),
             TermX::App(id, args) => {
                 write!(f, "({}", id)?;

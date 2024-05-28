@@ -102,7 +102,7 @@ fn main() {
             } else if args.infer_perm {
                 let mut solver = smt::Solver::new(args.solver, &args.solver_opts)
                     .expect("failed to create solver");
-                solver.set_logic("LIA").expect("failed to set logic");
+                solver.set_logic("ALL").expect("failed to set logic");
                 PermCheckMode::Infer(
                     solver,
                     PermInferOptions {

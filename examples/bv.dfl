@@ -1,4 +1,5 @@
 mut A: [bv32]
+mut B: array(bv8, bv32)
 
 chan ld_index: int | write A[ld_index]
 
@@ -22,5 +23,8 @@ proc St() | in st_value, in st_index =
     write x -> A[i]
     St()
 
+proc test() | write B[0bv8..2bv8] =
+    write 0bv32 -> B[1bv8]
+
 proc Program() | all =
-    Inc(0) || Ld() || St()
+    Inc(0) || Ld() || St() || write 0bv32 -> B[1bv8]
