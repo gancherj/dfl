@@ -23,9 +23,22 @@ proc St() | in st_value, in st_index =
     write x -> A[i]
     St()
 
-perm P()
-proc test() | P() =
+perm P1()
+perm P2(bool)
+const a: bv32
+chan C: bool | P2(C)
+proc test() | P1(), out C =
     write 0bv32 -> B[1bv8]
+    send 1bv32 u< a -> C
+    if not (1bv32 u< a) then
+        write 0bv32 -> B[3bv8]
+    end
+
+proc test2() | in C =
+    recv b <- C
+    if b then
+        write 0bv32 -> B[3bv8]
+    end
 
 proc Program() | all =
     Inc(0) || Ld() || St() || write 0bv32 -> B[1bv8]
