@@ -2,9 +2,9 @@ mut A: [int]
 mut B: int
 mut C: [[int]]
 
-chan C1: &A[1..*]
-chan C2: &A[*..*]
-chan C3: &{A[*..*][2], B}
+chan C1: &A[1..]
+chan C2: &A[*..]
+chan C3: &{A[*], B}
 chan C4: &A
 
 proc test1() | out C1, out C2, out C3 =

@@ -113,6 +113,20 @@ impl MutReferenceIndex {
             MutReferenceIndex::Unknown => true,
         }
     }
+
+    /// * + any = *
+    /// const + const = const
+    pub fn add(&self, other: &MutReferenceIndex) -> Option<MutReferenceIndex> {
+        match (self, other) {
+            (MutReferenceIndex::Int(a), MutReferenceIndex::Int(b)) => Some(MutReferenceIndex::Int(a + b)),
+            // NOTE: bit_vec(a + b) = bit_vec(a) +bv bit_vec(b)
+            (MutReferenceIndex::BitVec(a, w1),
+             MutReferenceIndex::BitVec(b, w2)) if w1 == w2 => Some(MutReferenceIndex::BitVec(a + b, *w1)),
+            (_, MutReferenceIndex::Unknown) => Some(MutReferenceIndex::Unknown),
+            (MutReferenceIndex::Unknown, _) => Some(MutReferenceIndex::Unknown),
+            _ => None,
+        }
+    }
 }
 
 impl MutReferenceTypeX {
@@ -142,19 +156,48 @@ impl MutReferenceTypeX {
                 }
             }
 
-            MutReferenceTypeX::Slice(t, i1, i2) => {
+            MutReferenceTypeX::Offset(t, i) => {
                 let typ = t.type_check(ctx)?;
                 match typ.borrow() {
                     MutTypeX::Base(..) => {
                         Err(format!("cannot take the slice of a base mutable type"))
                     }
                     MutTypeX::Array(t, ..) => {
-                        if !i1.as_ref().map(|i| i.has_base_type(t)).unwrap_or(false) ||
-                           !i2.as_ref().map(|i| i.has_base_type(t)).unwrap_or(false) {
+                        if !i.has_base_type(t) {
                             return Err(format!("incorrect index type"));
                         }
                         Ok(typ.clone())
                     }
+                }
+            }
+        }
+    }
+
+    /// Canonicalize a mutable reference type
+    /// e.g.
+    /// A[1..][2..][3] => A[6]
+    /// A[1..][*..][3][2..][3..] => A[*][6..]
+    /// In general, the canonical form is A[t1][t2]...[tn][t'..]
+    /// where t1 ... tn, t' are * or constants
+    pub fn canonicalize(typ: &MutReferenceType) -> Result<MutReferenceType, String> {
+        match typ.borrow() {
+            MutReferenceTypeX::Base(..) => Ok(typ.clone()),
+            MutReferenceTypeX::Index(m, i) => {
+                let m_canon = MutReferenceTypeX::canonicalize(m)?;
+                match m_canon.borrow() {
+                    // m[i2..][i] => m[i2 + i]
+                    MutReferenceTypeX::Offset(m_canon, i2) =>
+                        Ok(Rc::new(MutReferenceTypeX::Index(m_canon.clone(), i.add(i2).ok_or(format!("failed to add indices {} and {}", i, i2))?))),
+                    _ => Ok(Rc::new(MutReferenceTypeX::Index(m_canon, i.clone()))),
+                }
+            },
+            MutReferenceTypeX::Offset(m, i) => {
+                let m_canon = MutReferenceTypeX::canonicalize(m)?;
+                match m_canon.borrow() {
+                    // m[i2..][i..] => m[i2 + i..]
+                    MutReferenceTypeX::Offset(m_canon, i2) =>
+                        Ok(Rc::new(MutReferenceTypeX::Offset(m_canon.clone(), i.add(i2).ok_or(format!("failed to add indices {} and {}", i, i2))?))),
+                    _ => Ok(Rc::new(MutReferenceTypeX::Offset(m_canon, i.clone()))),
                 }
             }
         }
@@ -168,24 +211,14 @@ impl MutReferenceTypeX {
     /// However, for simplicity, we currently do not
     /// consider subtypings like A[1..][1..] <= A[2..]
     /// i.e. both references need to be of the same "shape"
-    pub fn is_subtype(&self, other: &MutReferenceType) -> bool {
-        match (self, &other.borrow()) {
-            (MutReferenceTypeX::Base(n1), MutReferenceTypeX::Base(n2)) => n1 == n2,
-            (MutReferenceTypeX::Index(m1, i1), MutReferenceTypeX::Index(m2, i2)) => {
-                m1.is_subtype(m2) && i1.is_subsumed_by(i2)
-            }
-            (MutReferenceTypeX::Slice(m1, i1, j1), MutReferenceTypeX::Slice(m2, i2, j2)) => {
-                m1.is_subtype(m2)
-                    && match (i1, i2) {
-                        (None, None) => true,
-                        (Some(i1), Some(i2)) => i1.is_subsumed_by(i2),
-                        _ => false,
-                    }
-                    && match (j1, j2) {
-                        (None, None) => true,
-                        (Some(j1), Some(j2)) => j1.is_subsumed_by(j2),
-                        _ => false,
-                    }
+    pub fn is_subtype(this: &MutReferenceType, other: &MutReferenceType) -> bool {
+        let this_canon = MutReferenceTypeX::canonicalize(this);
+        let other_canon = MutReferenceTypeX::canonicalize(other);
+        match (this_canon.as_ref().map(|t| t.as_ref()), other_canon.as_ref().map(|t| t.as_ref())) {
+            (Ok(MutReferenceTypeX::Base(n1)), Ok(MutReferenceTypeX::Base(n2))) => n1 == n2,
+            (Ok(MutReferenceTypeX::Index(m1, i1)), Ok(MutReferenceTypeX::Index(m2, i2))) |
+            (Ok(MutReferenceTypeX::Offset(m1, i1)), Ok(MutReferenceTypeX::Offset(m2, i2))) => {
+                MutReferenceTypeX::is_subtype(m1, m2) && i1.is_subsumed_by(i2)
             }
             _ => false,
         }
@@ -223,14 +256,14 @@ impl MutReferenceTypeX {
                             Self::concretize_index(i, index_type, local),
                         ))),
                 }
-            MutReferenceTypeX::Slice(m, i1, i2) =>
+            MutReferenceTypeX::Offset(m, i) =>
                 match m.type_check(ctx)?.borrow() {
                     MutTypeX::Base(..) => unreachable!(),
                     MutTypeX::Array(index_type, ..) =>
                         Ok(Spanned::new(MutReferenceX::Slice(
                             m.concretize(ctx, local)?,
-                            i1.clone().map(|i| Self::concretize_index(&i, index_type, local)),
-                            i2.clone().map(|i| Self::concretize_index(&i, index_type, local)),
+                            Some(Self::concretize_index(&i, index_type, local)),
+                            None,
                         ))),
                 }
         }
@@ -253,7 +286,8 @@ impl TermTypeX {
                     // Each type in refs1 is a subtype of some type in ref2
                     refs1
                         .iter()
-                        .all(|ref_typ1| refs2.iter().any(|ref_typ2| ref_typ1.is_subtype(ref_typ2)))
+                        .all(|ref_typ1|
+                            refs2.iter().any(|ref_typ2| MutReferenceTypeX::is_subtype(ref_typ1, ref_typ2)))
                 } else {
                     false
                 }
@@ -403,18 +437,19 @@ impl MutReferenceX {
                     })
                     .collect())
             }
-            MutReferenceX::Slice(m, t1, t2) => {
+            MutReferenceX::Slice(m, t, ..) => {
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
-                Ok(refs
-                    .iter()
-                    .map(|r| {
-                        Rc::new(MutReferenceTypeX::Slice(
-                            r.clone(),
-                            t1.clone().map(|t| MutReferenceIndex::from_term(&t)),
-                            t2.clone().map(|t| MutReferenceIndex::from_term(&t)),
-                        ))
-                    })
-                    .collect())
+
+                if let Some(t) = t {
+                    Ok(refs
+                        .iter()
+                        .map(|r|
+                            // [t1..t2] => [^(t1)..]
+                            Rc::new(MutReferenceTypeX::Offset(r.clone(), MutReferenceIndex::from_term(&t))))
+                        .collect())
+                } else {
+                    Ok(refs)
+                }
             }
         }
     }
@@ -905,8 +940,9 @@ impl ProcX {
                     let mut subst = IndexMap::new();
 
                     for (arg, param) in args.iter().zip(&proc_decl.params) {
-                        if !TermX::type_check(arg, ctx, local)?.is_subtype(&param.typ) {
-                            return Error::spanned_err(k1.span, format!("unmatched argument type"));
+                        let typ = TermX::type_check(arg, ctx, local)?;
+                        if !typ.is_subtype(&param.typ) {
+                            return Error::spanned_err(k1.span, format!("unmatched argument type: expecting {}, got {}", param.typ, typ));
                         }
                         subst.insert(param.name.clone(), arg.clone());
                     }
@@ -955,11 +991,11 @@ impl ProcX {
                     )
                 }
             }
-            ProcX::Debug(k) => {
-                println!("local context: {:?}", local);
-                println!("resouce context: {:?}", rctx);
-                ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
-            }
+            // ProcX::Debug(k) => {
+            //     println!("local context: {:?}", local);
+            //     println!("resouce context: {:?}", rctx);
+            //     ProcX::type_check_inplace(k, ctx, local, rctx, path_conditions, constraints)
+            // }
         }
     }
 

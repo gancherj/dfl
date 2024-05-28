@@ -87,7 +87,7 @@ MutReferenceIndex: MutReferenceIndex = {
 MutReferenceType: MutReferenceType = {
     <name:MutName> => Rc::new(MutReferenceTypeX::Base(name)),
     <m:MutReferenceType> "[" <i:MutReferenceIndex> "]" => Rc::new(MutReferenceTypeX::Index(m, i)),
-    <m:MutReferenceType> "[" <i1:MutReferenceIndex?> ".." <i2:MutReferenceIndex?> "]" => Rc::new(MutReferenceTypeX::Slice(m, i1, i2)),
+    <m:MutReferenceType> "[" <i:MutReferenceIndex> ".." "]" => Rc::new(MutReferenceTypeX::Offset(m, i)),
 }
 
 MutReference: MutReference = {

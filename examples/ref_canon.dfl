@@ -1,0 +1,4 @@
+mut A: [int]
+
+proc RefInc(r: &A[*..]) =
+    RefInc(&*r[1..])

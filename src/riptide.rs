@@ -1,9 +1,13 @@
-use std::rc::Rc;
+use std::{borrow::Borrow, rc::Rc};
 use std::io;
 
 use im::HashMap;
 use indexmap::IndexMap;
 use serde::{Serialize, Deserialize};
+
+use crate::ast::{Program, ConstDeclX, BaseType};
+use crate::span::Spanned;
+use crate::{BitVecWidth, Decl, MutDeclX, MutTypeX};
 
 pub type ChannelId = u32;
 pub type OperatorId = u32;
@@ -15,6 +19,7 @@ struct RawFunArg {
     name: String,
     #[serde(rename = "type")]
     typ: String,
+    noalias: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -72,6 +77,9 @@ pub type Parameter = Rc<ParameterX>;
 pub struct ParameterX {
     pub name: ParamName,
     pub typ: ParamType,
+
+    /// True if the parameter can alias with another parameter (pointers only)
+    pub alias: bool,
 }
 
 #[derive(Debug)]
@@ -167,6 +175,7 @@ impl Graph {
             params.insert(name.clone(), Rc::new(ParameterX {
                 name: name,
                 typ: ParamTypeX::from_str(&arg.typ)?,
+                alias: arg.noalias == Some(false),
             }));
         }
 
@@ -251,5 +260,71 @@ impl Graph {
         }
 
         Ok(Graph { params, chans, ops })
+    }
+
+    pub fn to_program(&self, word_width: BitVecWidth) -> Program {
+        let mut consts = Vec::new();
+        let mut muts = Vec::new();
+
+        let mut has_alias = false;
+
+        // Generate function arguments
+        for param in self.params.values() {
+            match param.typ.borrow() {
+                ParamTypeX::Int(width) => {
+                    consts.push(Spanned::new(ConstDeclX {
+                        name: format!("param_{}", param.name).into(),
+                        typ: BaseType::BitVec(*width),
+                    }));
+                }
+                ParamTypeX::Pointer(base) =>
+                    match base.borrow() {
+                        ParamTypeX::Int(width) => {
+                            if !param.alias {
+                                muts.push(Spanned::new(MutDeclX {
+                                    name: format!("param_{}", param.name).into(),
+                                    typ: MutTypeX::array(
+                                        BaseType::BitVec(word_width),
+                                        MutTypeX::base(BaseType::BitVec(*width)),
+                                    ),
+                                }));
+                            } else {
+                                assert!(*width == word_width); // not supported otherwise
+                                has_alias = true;
+
+                                // Add a constant pointer into the memory
+                                consts.push(Spanned::new(ConstDeclX {
+                                    name: format!("param_{}", param.name).into(),
+                                    typ: BaseType::BitVec(word_width),
+                                }));
+                            }
+                        },
+                        _ => unimplemented!("nested pointer")
+                    }
+            }
+        }
+
+        if has_alias {
+            muts.push(Spanned::new(MutDeclX {
+                name: "mem".into(),
+                typ: MutTypeX::array(
+                    BaseType::BitVec(word_width),
+                    MutTypeX::base(BaseType::BitVec(word_width)),
+                ),
+            }));
+        }
+
+        // Infer base types of channels
+        // by propagating type information
+
+        // Generate channels
+
+        // Generate concrete processes
+
+        Program {
+            decls: consts.into_iter().map(|d| Decl::Const(d))
+                .chain(muts.into_iter().map(|d: Rc<Spanned<MutDeclX>>| Decl::Mut(d)))
+                .collect(),
+        }
     }
 }

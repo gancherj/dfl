@@ -42,7 +42,7 @@ rc_str_type!(MutName, "{}");
 rc_str_type!(ChanName, "{}");
 rc_str_type!(ProcName, "{}");
 rc_str_type!(Var, "{}");
-rc_str_type!(Const, "const({})");
+rc_str_type!(Const, "{}");
 rc_str_type!(PermVar, "{}");
 
 #[derive(Clone, Copy, Debug)]
@@ -65,11 +65,7 @@ pub type MutReferenceType = Rc<MutReferenceTypeX>;
 pub enum MutReferenceTypeX {
     Base(MutName),
     Index(MutReferenceType, MutReferenceIndex),
-    Slice(
-        MutReferenceType,
-        Option<MutReferenceIndex>,
-        Option<MutReferenceIndex>,
-    ),
+    Offset(MutReferenceType, MutReferenceIndex),
 }
 
 pub type MutReference = RcSpanned<MutReferenceX>;
@@ -153,7 +149,6 @@ pub enum ProcX {
     Ite(Term, Proc, Proc),
     Call(ProcName, Vec<Term>),
     Par(Proc, Proc),
-    Debug(Proc),
 }
 
 pub type ConstDecl = RcSpanned<ConstDeclX>;
@@ -760,6 +755,14 @@ impl TermX {
 }
 
 impl MutTypeX {
+    pub fn base(base: impl Borrow<BaseType>) -> MutType {
+        Rc::new(MutTypeX::Base(base.borrow().clone()))
+    }
+    
+    pub fn array(index: impl Borrow<BaseType>, base: impl Borrow<MutType>) -> MutType {
+        Rc::new(MutTypeX::Array(index.borrow().clone(), base.borrow().clone()))
+    }
+
     pub fn get_dimensions(&self) -> usize {
         match self {
             MutTypeX::Base(..) => 0,
@@ -1026,7 +1029,6 @@ impl ProcX {
                     None
                 }
             }
-            ProcX::Debug(..) => None,
         }
     }
 
@@ -1476,17 +1478,7 @@ impl fmt::Display for MutReferenceTypeX {
         match self {
             MutReferenceTypeX::Base(name) => write!(f, "{}", name),
             MutReferenceTypeX::Index(m, i) => write!(f, "{}[{}]", m, i),
-            MutReferenceTypeX::Slice(m, i1, i2) => {
-                write!(f, "{}[", m)?;
-                if let Some(i1) = i1 {
-                    write!(f, "{}", i1)?;
-                }
-                write!(f, "..")?;
-                if let Some(i2) = i2 {
-                    write!(f, "{}", i2)?;
-                }
-                write!(f, "]")
-            }
+            MutReferenceTypeX::Offset(m, i) => write!(f, "{}[{}..]", m, i),
         }
     }
 }
@@ -1557,5 +1549,123 @@ impl fmt::Display for PermissionX {
                 write!(f, ")")
             }
         }
+    }
+}
+
+impl fmt::Display for ConstDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "const {}: {}", self.name, self.typ)
+    }
+}
+
+impl fmt::Display for PermDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "perm {}(", self.name)?;
+        for (i, typ) in self.param_typs.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}", typ)?;
+            } else {
+                write!(f, ", {}", typ)?;
+            }
+        }
+        write!(f, ")")
+    }
+}
+
+impl fmt::Display for MutDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "mut {}: {}", self.name, self.typ)
+    }
+}
+
+impl fmt::Display for ChanDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "chan {}: {} | {}", self.name, self.typ, self.perm)
+    }
+}
+
+impl fmt::Display for ProcParam {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.name, self.typ)
+    }
+}
+
+impl fmt::Display for ProcResourceX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProcResourceX::Perm(p) => write!(f, "{}", p),
+            ProcResourceX::Input(n) => write!(f, "in {}", n),
+            ProcResourceX::Output(n) => write!(f, "out {}", n),
+        }
+    }
+}
+
+impl fmt::Display for ProcX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProcX::Skip => write!(f, "skip"),
+            ProcX::Send(c, t, p) => write!(f, "send {} -> {}; {}", t, c, p),
+            ProcX::Recv(c, v, p) => write!(f, "recv {} <- {}; {}", v, c, p),
+            ProcX::Write(m, t, p) => write!(f, "write {} -> {}; {}", t, m, p),
+            ProcX::Read(m, v, p) => write!(f, "read {} <- {}; {}", v, m, p),
+            ProcX::Ite(t, p1, p2) => write!(f, "if {} then {} else {} end", t, p1, p2),
+            ProcX::Call(name, args) => {
+                write!(f, "{}(", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i == 0 {
+                        write!(f, "{}", arg)?;
+                    } else {
+                        write!(f, ", {}", arg)?;
+                    }
+                }
+                write!(f, ")")
+            }
+            ProcX::Par(p1, p2) => write!(f, "({} || {})", p1, p2),
+        }
+    }
+}
+
+impl fmt::Display for ProcDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "proc {}(", self.name)?;
+        for (i, param) in self.params.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}", param)?;
+            } else {
+                write!(f, ", {}", param)?;
+            }
+        }
+        write!(f, ") ")?;
+
+        for (i, res) in self.res.iter().enumerate() {
+            if i == 0 {
+                write!(f, "| {} ", res)?;
+            } else {
+                write!(f, ", {} ", res)?;
+            }
+        }
+
+        write!(f, "= {}", self.body)
+    }
+}
+
+impl fmt::Display for Decl {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Decl::Const(decl) => write!(f, "{}", decl),
+            Decl::Perm(decl) => write!(f, "{}", decl),
+            Decl::Mut(decl) => write!(f, "{}", decl),
+            Decl::Chan(decl) => write!(f, "{}", decl),
+            Decl::Proc(decl) => write!(f, "{}", decl),
+        }
+    }
+}
+
+impl fmt::Display for Program {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for decl in &self.decls {
+            writeln!(f, "{}", decl)?;
+        }
+        Ok(())
     }
 }
