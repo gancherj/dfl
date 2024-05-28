@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::{borrow::Borrow, fmt};
 
 use im::Vector;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 use crate::{
     ast::*,
@@ -379,125 +379,269 @@ impl PermInferOptions {
 impl Interpretation {
     /// Generate a SyGuS grammar for a permission variable
     fn generate_synthsis_grammar(
+        &self,
         options: &PermInferOptions,
         ctx: &Ctx,
         perm_decl: &PermDecl,
     ) -> SynthFunGrammar {
-        let num_arr_idx: usize = ctx.max_mut_dim();
+        let mut symbols = Vec::new();
 
-        Rc::new(smt::SynthFunGrammarX {
-            symbols: [
-                smt::NonTerminal::new("Start", smt::Sort::Bool, [
-                    smt::TermX::var("StartAtom"),
-                    smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
-                ].into_iter().chain(
-                    if options.use_ite {
-                        vec![smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))]
-                    } else {
-                        vec![]
-                    }
-                )),
-                smt::NonTerminal::new("StartAtom", smt::Sort::Bool, [
-                    smt::TermX::and(
-                        [smt::TermX::var("Mutable")]
-                        .into_iter()
-                        .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
-                        .chain([smt::TermX::var("Fraction")])
-                    ),
+        // Start ::= StartAtom + ... + StartAtom | if TermBool { StartAtom } else { StartAtom }
+        if options.use_ite {
+            symbols.push(smt::NonTerminal::new("Start", smt::Sort::Bool, [
+                smt::TermX::var("StartAtom"),
+                smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
+                smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))
+            ]));
+        } else {
+            symbols.push(smt::NonTerminal::new("Start", smt::Sort::Bool, [
+                smt::TermX::var("StartAtom"),
+                smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
+            ]));
+        }
 
-                    // smt::TermX::or(
-                    //     ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
-                    //             [
-                    //                 smt::TermX::var("Mutable"),
-                    //                 // smt::TermX::var(format!("Mutable{}", i)),
-                    //                 // smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-                    //             ]
-                    //             .into_iter()
-                    //             .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
-                    //             .chain([smt::TermX::var("Fraction")])
-                    //         ),
-                    //     )
-                    // ),
-                ])
-            ].into_iter()
-            .chain([
-                // ctx.muts.iter().enumerate().map(|(i, _)|
-                //     // Three restrict an array index:
-                //     // indexing (A[i]), slicing (A[i:] or A[i:j])
-                //     smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
-                //         smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-                //     ])
-                // )
-                smt::NonTerminal::new("Mutable", smt::Sort::Bool, ctx.muts.iter().enumerate().map(|(i, _)|
-                    smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))
-                ))
-            ])
-            .chain(
-                (0..num_arr_idx).map(|i|
-                    // Two restrict an array index: slicing (A[i:] or A[i:j])
-                    if options.array_slices {
-                        smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
-                            // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                            smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                            smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-                        ])
-                    } else {
-                        // No restriction on array indices
-                        smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [ smt::TermX::bool(true) ])
-                    }
-                )
+        // StartAtom ::= (and (mut_idx = 0) Fraction ArrayIndex_0_0 ArrayIndex_0_1 ...) |
+        //               (and (mut_idx = 1) Fraction ArrayIndex_1_0 ArrayIndex_1_1 ...)
+        let mut atomic_rules = Vec::new();
+        for (i, decl) in ctx.muts.values().enumerate() {
+            atomic_rules.push(smt::TermX::and(
+                [smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))]
+                .into_iter()
+                .chain([smt::TermX::var("Fraction")])
+                .chain((0..decl.typ.get_dimensions()).map(|j| smt::TermX::var(format!("ArrayIndex_{}_{}", i, j))))
+            ));
+        }
+        symbols.push(smt::NonTerminal::new("StartAtom", smt::Sort::Bool, &atomic_rules));
+
+        // Fraction ::= read 0 | read 1 | ... | read n | write (n + 1) | write 0
+        symbols.push(smt::NonTerminal::new("Fraction", smt::Sort::Bool,
+            // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
+            (0..options.num_fractions).map(|f|
+                if f == options.num_fractions - 1 {
+                    smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+                } else {
+                    smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+                }
+            ).chain(
+                if options.num_fractions == 1 {
+                    vec![smt::TermX::bool(false)]
+                } else {
+                    vec![
+                        smt::TermX::bool(false),
+                        smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+                    ]
+                }
             )
-            .chain([
-                smt::NonTerminal::new("Fraction", smt::Sort::Bool,
-                    // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
-                    (0..options.num_fractions).map(|f|
-                        if f == options.num_fractions - 1 {
-                            smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
-                        } else {
-                            smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+        ));
+
+        // All used bit-widths in bit-vector indices
+        let mut used_widths = IndexSet::new();
+
+        for (i, mut_name) in ctx.muts.keys().enumerate() {
+            for (j, (base, _)) in self.arr_indices[mut_name].iter().enumerate() {
+                let index_grammar = match base {
+                    BaseType::Int => smt::TermX::var("TermInt"),
+                    BaseType::BitVec(w) => {
+                        used_widths.insert(*w);
+                        smt::TermX::var(format!("TermBV{}", w))
+                    }
+                    _ => unimplemented!()
+                };
+                
+                symbols.push(smt::NonTerminal::new(format!("ArrayIndex_{}_{}", i, j), smt::Sort::Bool,
+                    if options.array_slices {
+                        match base {
+                            BaseType::Int => vec![
+                                // TermInt <= arr_idx_i_j
+                                smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+
+                                // TermInt <= arr_idx_i_j < TermInt
+                                smt::TermX::and([
+                                    smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                    smt::TermX::gt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                ]),
+                            ],
+                            BaseType::BitVec(..) => vec![
+                                smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                smt::TermX::and([
+                                    smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                    smt::TermX::bvugt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                ]),
+                            ],
+                            _ => unimplemented!()
                         }
-                    ).chain(
-                        if options.num_fractions == 1 {
-                            vec![smt::TermX::bool(false)]
-                        } else {
-                            vec![
-                                smt::TermX::bool(false),
-                                smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
-                            ]
-                        }
-                    )
-                ),
-                smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
-                    smt::TermX::int(0),
-                    smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
+                    } else {
+                        // No constraint on the array index if slicing is not enabled
+                        vec![smt::TermX::bool(true)]
+                    }
+                ));
+            }
+        }
+
+        // Generate grammar for bit-vector terms
+        for width in used_widths {
+            symbols.push(smt::NonTerminal::new(format!("ConstantBV{}", width), smt::Sort::BitVec(width), [
+                smt::TermX::bit_vec(0, width),
+                smt::TermX::bvadd(smt::TermX::var(format!("ConstantBV{}", width)), smt::TermX::bit_vec(1, width)),
+            ]));
+            symbols.push(smt::NonTerminal::new(format!("TermBV{}", width), smt::Sort::BitVec(width),
+                    // Only add dependent variables of type bv{width}
+                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+                    match typ {
+                        BaseType::BitVec(w) if *w == width => Some(smt::TermX::var(format!("x{}", i))),
+                        _ => None,
+                    }
+                ).chain([
+                    smt::TermX::bit_vec(0, width),
+                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, width)),
                 ]),
-                smt::NonTerminal::new("TermInt", smt::Sort::Int,
-                    // Only add dependent variables of type int
-                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-                        match typ {
-                            BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
-                            _ => None,
-                        }
-                    ).chain([
-                        smt::TermX::int(0),
-                        smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
-                    ]),
-                ),
-                smt::NonTerminal::new("TermBool", smt::Sort::Bool,
-                    // Only add dependent variables of type bool
-                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-                        match typ {
-                            BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
-                            _ => None,
-                        }
-                    ).chain([
-                        smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
-                        // no need for not since we can just reorder ite branches
-                        // smt::TermX::not(smt::TermX::var("TermBool")),
-                    ]),
-                ),
-            ]).collect(),
-        })
+            ));
+        }
+
+        symbols.extend([
+            smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
+                smt::TermX::int(0),
+                smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
+            ]),
+            smt::NonTerminal::new("TermInt", smt::Sort::Int,
+                // Only add dependent variables of type int
+                perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+                    match typ {
+                        BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
+                        _ => None,
+                    }
+                ).chain([
+                    smt::TermX::int(0),
+                    smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
+                ]),
+            ),
+            smt::NonTerminal::new("TermBool", smt::Sort::Bool,
+                // Only add dependent variables of type bool
+                perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+                    match typ {
+                        BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
+                        _ => None,
+                    }
+                ).chain([
+                    smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
+                ]),
+            ),
+        ]);
+
+        Rc::new(smt::SynthFunGrammarX { symbols })
+        // Rc::new(smt::SynthFunGrammarX {
+        //     symbols: [
+        //         smt::NonTerminal::new("Start", smt::Sort::Bool, [
+        //             smt::TermX::var("StartAtom"),
+        //             smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
+        //         ].into_iter().chain(
+        //             if options.use_ite {
+        //                 vec![smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))]
+        //             } else {
+        //                 vec![]
+        //             }
+        //         )),
+        //         smt::NonTerminal::new("StartAtom", smt::Sort::Bool, [
+        //             smt::TermX::and(
+        //                 [smt::TermX::var("Mutable")]
+        //                 .into_iter()
+        //                 .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
+        //                 .chain([smt::TermX::var("Fraction")])
+        //             ),
+
+        //             // smt::TermX::or(
+        //             //     ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
+        //             //             [
+        //             //                 smt::TermX::var("Mutable"),
+        //             //                 // smt::TermX::var(format!("Mutable{}", i)),
+        //             //                 // smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+        //             //             ]
+        //             //             .into_iter()
+        //             //             .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
+        //             //             .chain([smt::TermX::var("Fraction")])
+        //             //         ),
+        //             //     )
+        //             // ),
+        //         ])
+        //     ].into_iter()
+        //     .chain([
+        //         // ctx.muts.iter().enumerate().map(|(i, _)|
+        //         //     // Three restrict an array index:
+        //         //     // indexing (A[i]), slicing (A[i:] or A[i:j])
+        //         //     smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
+        //         //         smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
+        //         //     ])
+        //         // )
+        //         smt::NonTerminal::new("Mutable", smt::Sort::Bool, ctx.muts.iter().enumerate().map(|(i, _)|
+        //             smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))
+        //         ))
+        //     ])
+        //     .chain(
+        //         (0..num_arr_idx).map(|i|
+        //             // Two restrict an array index: slicing (A[i:] or A[i:j])
+        //             if options.array_slices {
+        //                 smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
+        //                     // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+        //                     smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+        //                     smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
+        //                 ])
+        //             } else {
+        //                 // No restriction on array indices
+        //                 smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [ smt::TermX::bool(true) ])
+        //             }
+        //         )
+        //     )
+        //     .chain([
+        //         smt::NonTerminal::new("Fraction", smt::Sort::Bool,
+        //             // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
+        //             (0..options.num_fractions).map(|f|
+        //                 if f == options.num_fractions - 1 {
+        //                     smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+        //                 } else {
+        //                     smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
+        //                 }
+        //             ).chain(
+        //                 if options.num_fractions == 1 {
+        //                     vec![smt::TermX::bool(false)]
+        //                 } else {
+        //                     vec![
+        //                         smt::TermX::bool(false),
+        //                         smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+        //                     ]
+        //                 }
+        //             )
+        //         ),
+        //         smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
+        //             smt::TermX::int(0),
+        //             smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
+        //         ]),
+        //         smt::NonTerminal::new("TermInt", smt::Sort::Int,
+        //             // Only add dependent variables of type int
+        //             perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+        //                 match typ {
+        //                     BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
+        //                     _ => None,
+        //                 }
+        //             ).chain([
+        //                 smt::TermX::int(0),
+        //                 smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
+        //             ]),
+        //         ),
+        //         smt::NonTerminal::new("TermBool", smt::Sort::Bool,
+        //             // Only add dependent variables of type bool
+        //             perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
+        //                 match typ {
+        //                     BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
+        //                     _ => None,
+        //                 }
+        //             ).chain([
+        //                 smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
+        //                 // no need for not since we can just reorder ite branches
+        //                 // smt::TermX::not(smt::TermX::var("TermBool")),
+        //             ]),
+        //         ),
+        //     ]).collect(),
+        // })
     }
 
     /// Initialize an interpretation using fresh variables to represent
@@ -612,10 +756,8 @@ impl Interpretation {
                     format!("pv_{}", decl.name),
                     inputs,
                     smt::Sort::Bool,
-                    None,
-                    // Some(&Interpretation::generate_synthsis_grammar(
-                    //     options, ctx, decl,
-                    // )),
+                    // None,
+                    Some(&interp.generate_synthsis_grammar(options, ctx, decl)),
                 );
 
                 interp
