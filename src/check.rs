@@ -177,13 +177,21 @@ impl MutReferenceTypeX {
     /// e.g.
     /// A[1..][2..][3] => A[6]
     /// A[1..][*..][3][2..][3..] => A[*][6..]
+    ///
     /// In general, the canonical form is A[t1][t2]...[tn][t'..]
     /// where t1 ... tn, t' are * or constants
-    pub fn canonicalize(typ: &MutReferenceType) -> Result<MutReferenceType, String> {
+    pub fn canonicalize(ctx: &Ctx, typ: &MutReferenceType) -> Result<MutReferenceType, String> {
         match typ.borrow() {
-            MutReferenceTypeX::Base(..) => Ok(typ.clone()),
+            MutReferenceTypeX::Base(..) =>
+                match typ.type_check(ctx)?.borrow() {
+                    MutTypeX::Base(..) => Ok(typ.clone()),
+                    // If A is an array, rewrite A => A[0..]
+                    MutTypeX::Array(BaseType::Int, ..) => Ok(Rc::new(MutReferenceTypeX::Offset(typ.clone(), MutReferenceIndex::Int(0)))),
+                    MutTypeX::Array(BaseType::BitVec(w), ..) => Ok(Rc::new(MutReferenceTypeX::Offset(typ.clone(), MutReferenceIndex::BitVec(0, *w)))),
+                    _ => Err(format!("unsupported base reference type {}", typ))
+                }
             MutReferenceTypeX::Index(m, i) => {
-                let m_canon = MutReferenceTypeX::canonicalize(m)?;
+                let m_canon = MutReferenceTypeX::canonicalize(ctx, m)?;
                 match m_canon.borrow() {
                     // m[i2..][i] => m[i2 + i]
                     MutReferenceTypeX::Offset(m_canon, i2) =>
@@ -192,7 +200,7 @@ impl MutReferenceTypeX {
                 }
             },
             MutReferenceTypeX::Offset(m, i) => {
-                let m_canon = MutReferenceTypeX::canonicalize(m)?;
+                let m_canon = MutReferenceTypeX::canonicalize(ctx, m)?;
                 match m_canon.borrow() {
                     // m[i2..][i..] => m[i2 + i..]
                     MutReferenceTypeX::Offset(m_canon, i2) =>
@@ -211,15 +219,14 @@ impl MutReferenceTypeX {
     /// However, for simplicity, we currently do not
     /// consider subtypings like A[1..][1..] <= A[2..]
     /// i.e. both references need to be of the same "shape"
-    pub fn is_subtype(this: &MutReferenceType, other: &MutReferenceType) -> bool {
-        let this_canon = MutReferenceTypeX::canonicalize(this);
-        let other_canon = MutReferenceTypeX::canonicalize(other);
+    pub fn is_subtype(ctx: &Ctx, this: &MutReferenceType, other: &MutReferenceType) -> bool {
+        let this_canon = MutReferenceTypeX::canonicalize(ctx, this);
+        let other_canon = MutReferenceTypeX::canonicalize(ctx, other);
         match (this_canon.as_ref().map(|t| t.as_ref()), other_canon.as_ref().map(|t| t.as_ref())) {
             (Ok(MutReferenceTypeX::Base(n1)), Ok(MutReferenceTypeX::Base(n2))) => n1 == n2,
             (Ok(MutReferenceTypeX::Index(m1, i1)), Ok(MutReferenceTypeX::Index(m2, i2))) |
-            (Ok(MutReferenceTypeX::Offset(m1, i1)), Ok(MutReferenceTypeX::Offset(m2, i2))) => {
-                MutReferenceTypeX::is_subtype(m1, m2) && i1.is_subsumed_by(i2)
-            }
+            (Ok(MutReferenceTypeX::Offset(m1, i1)), Ok(MutReferenceTypeX::Offset(m2, i2))) =>
+                m1 == m2 || MutReferenceTypeX::is_subtype(ctx, m1, m2) && i1.is_subsumed_by(i2),
             _ => false,
         }
     }
@@ -272,7 +279,7 @@ impl MutReferenceTypeX {
 
 impl TermTypeX {
     /// Checks if self <= other in subtyping
-    pub fn is_subtype(&self, other: &TermTypeX) -> bool {
+    pub fn is_subtype(&self, ctx: &Ctx, other: &TermTypeX) -> bool {
         match self {
             TermTypeX::Base(t) => {
                 if let TermTypeX::Base(other) = other {
@@ -287,7 +294,7 @@ impl TermTypeX {
                     refs1
                         .iter()
                         .all(|ref_typ1|
-                            refs2.iter().any(|ref_typ2| MutReferenceTypeX::is_subtype(ref_typ1, ref_typ2)))
+                            refs2.iter().any(|ref_typ2| MutReferenceTypeX::is_subtype(ctx, ref_typ1, ref_typ2)))
                 } else {
                     false
                 }
@@ -690,7 +697,7 @@ impl PermissionX {
                 }
 
                 for (typ, term) in decl.param_typs.iter().zip(terms) {
-                    if !TermX::type_check(term, ctx, local)?.is_subtype(&TermTypeX::base(typ)) {
+                    if !TermX::type_check(term, ctx, local)?.is_subtype(ctx, &TermTypeX::base(typ)) {
                         return Error::spanned_err(
                             perm.span,
                             format!("unmatched argument type for permission variable `{}`", v),
@@ -723,7 +730,7 @@ impl ProcX {
                 ))?;
 
                 let t_typ = TermX::type_check(t, ctx, local)?;
-                if !t_typ.is_subtype(&chan_decl.typ) {
+                if !t_typ.is_subtype(ctx, &chan_decl.typ) {
                     return Error::spanned_err(
                         proc.span,
                         format!(
@@ -795,7 +802,7 @@ impl ProcX {
                 let t_typ = TermX::type_check(t, ctx, local)?;
 
                 if let MutTypeX::Base(base) = MutReferenceX::type_check(m, ctx, local)?.borrow() {
-                    if !t_typ.is_subtype(&TermTypeX::base(base)) {
+                    if !t_typ.is_subtype(ctx, &TermTypeX::base(base)) {
                         return Error::spanned_err(
                             proc.span,
                             format!(
@@ -941,7 +948,7 @@ impl ProcX {
 
                     for (arg, param) in args.iter().zip(&proc_decl.params) {
                         let typ = TermX::type_check(arg, ctx, local)?;
-                        if !typ.is_subtype(&param.typ) {
+                        if !typ.is_subtype(ctx, &param.typ) {
                             return Error::spanned_err(k1.span, format!("unmatched argument type: expecting {}, got {}", param.typ, typ));
                         }
                         subst.insert(param.name.clone(), arg.clone());

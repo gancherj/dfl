@@ -7,6 +7,12 @@ chan C2: &A[*..]
 chan C3: &{A[*], B}
 chan C4: &A
 
+chan C5: &A
+chan C6: &A[*..]
+
+chan C7: &A[2]
+chan C8: &A[1..][1]
+
 proc test1() | out C1, out C2, out C3 =
     send &A[1..5] -> C1
     send &A[2..4] -> C2
@@ -24,3 +30,11 @@ proc test3() | write A, write B, in C3 =
 proc test4() | write A[1], in C4 =
     recv r <- C4
     write 0 -> *r[1]
+
+proc test5() | in C5, out C6 =
+    recv x <- C5
+    send x -> C6
+
+proc test6() | in C7, out C8 =
+    recv x <- C7
+    send x -> C8
