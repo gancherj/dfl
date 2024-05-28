@@ -41,11 +41,11 @@ struct Args {
     num_fractions: usize,
 
     /// Path to the SMT solver
-    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "z3")]
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
     solver: String,
 
     /// Options for the SMT solver
-    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "-in")]
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "--no-interactive --incremental")]
     solver_opts: Vec<String>,
 }
 
@@ -81,7 +81,7 @@ fn main() {
     // let reader = BufReader::new(o2p_file);
     // println!("parsed: {:?}", Graph::from_reader(reader));
     
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     let path = &args.source;
     let src = fs::read_to_string(path).expect("failed to read input file");
@@ -90,30 +90,34 @@ fn main() {
     match parsed {
         Ok(program) => {
             let ctx = Ctx::from(&program).unwrap();
-            // println!("{:?}", ctx);
 
             assert!(!(args.check_perm && args.infer_perm));
 
-            let mut mode = if args.check_perm {
-                PermCheckMode::Check(
-                    smt::Solver::new(args.solver, &args.solver_opts)
-                        .expect("failed to create solver"),
-                )
-            } else if args.infer_perm {
-                let mut solver = smt::Solver::new(args.solver, &args.solver_opts)
-                    .expect("failed to create solver");
-                solver.set_logic("ALL").expect("failed to set logic");
-                PermCheckMode::Infer(
-                    solver,
-                    PermInferOptions {
-                        array_slices: args.array_slices,
-                        use_ite: args.use_ite,
-                        num_fractions: args.num_fractions,
-                    },
-                )
-            } else {
-                PermCheckMode::None
-            };
+            let mut mode =
+                if args.check_perm {
+                    let mut solver = smt::Solver::new(args.solver, &args.solver_opts)
+                        .expect("failed to create solver");
+                    solver.set_logic("ALL").expect("failed to set logic");
+                    PermCheckMode::Check(solver)
+                } else if args.infer_perm {
+                    if args.solver == "cvc5" {
+                        args.solver_opts.extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
+                    }
+
+                    let mut solver = smt::Solver::new(args.solver, &args.solver_opts)
+                        .expect("failed to create solver");
+                    solver.set_logic("ALL").expect("failed to set logic");
+                    PermCheckMode::Infer(
+                        solver,
+                        PermInferOptions {
+                            array_slices: args.array_slices,
+                            use_ite: args.use_ite,
+                            num_fractions: args.num_fractions,
+                        },
+                    )
+                } else {
+                    PermCheckMode::None
+                };
 
             match ctx.type_check(&mut mode) {
                 Ok(()) => {}
