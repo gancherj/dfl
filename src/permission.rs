@@ -16,7 +16,8 @@ use crate::{
     ast::*,
     check::LocalCtx,
     smt::{self, EncodingCtx, SynthFunGrammar},
-    span::{Error, Spanned},
+    span::Spanned,
+    error::SpannedError,
 };
 
 pub type PermConstraint = Rc<PermConstraintX>;
@@ -83,18 +84,18 @@ impl Ctx {
 impl TermX {
     /// Encode the term as an SMT term
     /// All free variables and constants are introduced as SMT constants
-    pub fn as_smt_term(term: &Term, interp: &Interpretation) -> Result<smt::Term, Error> {
+    pub fn as_smt_term(term: &Term, interp: &Interpretation) -> Result<smt::Term, SpannedError> {
         match &term.x {
             TermX::Var(v) => interp
                 .vars
                 .get(v)
                 .cloned()
-                .ok_or(Error::spanned(term.span, format!("undefined variable {v}"))),
+                .ok_or(SpannedError::spanned(&term.span, format!("undefined variable {v}"))),
             TermX::Const(c) => interp
                 .consts
                 .get(c)
                 .cloned()
-                .ok_or(Error::spanned(term.span, format!("undefined constant {c}"))),
+                .ok_or(SpannedError::spanned(&term.span, format!("undefined constant {c}"))),
             TermX::Bool(b) => Ok(smt::TermX::bool(*b)),
             TermX::Int(i) => {
                 if *i >= 0 {
@@ -163,7 +164,7 @@ impl PermissionX {
         perm: &Permission,
         ctx: &Ctx,
         interp: &Interpretation,
-    ) -> Result<smt::Term, Error> {
+    ) -> Result<smt::Term, SpannedError> {
         match &perm.x {
             PermissionX::Empty => Ok(smt::TermX::bool(false)),
             PermissionX::Add(p1, p2) => Ok(smt::TermX::or([
@@ -207,8 +208,8 @@ impl PermissionX {
                     .map(|t| TermX::as_smt_term(t, interp))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let perm_interp = interp.perms.get(v).ok_or(Error::spanned(
-                    perm.span,
+                let perm_interp = interp.perms.get(v).ok_or(SpannedError::spanned(
+                    &perm.span,
                     format!("permission variable `{}` does not exist", v),
                 ))?;
 
@@ -222,7 +223,7 @@ impl PermissionX {
                         .chain([&interp.frac_idx])
                         .chain(interp.arr_indices.values().flatten().map(|t| &t.1)),
                 ))
-            } // Error::spanned_err(perm.span, format!("permission variable not supported for SMT encoding"))
+            } // SpannedError::spanned_err(&perm.span, format!("permission variable not supported for SMT encoding"))
         }
     }
 
@@ -236,13 +237,13 @@ impl PermissionX {
         conditions: &mut Vec<smt::Term>,
         current_base: &mut Option<smt::Term>,
         current_idx: &mut usize,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SpannedError> {
         match &mut_ref.x {
             MutReferenceX::Base(base) => {
                 // If this reference is talking about some other
                 // mutable, the permission is always false
-                let base_mut_idx = ctx.get_mut_index(base).ok_or(Error::spanned(
-                    mut_ref.span,
+                let base_mut_idx = ctx.get_mut_index(base).ok_or(SpannedError::spanned(
+                    &mut_ref.span,
                     format!("undefined mutable {base}"),
                 ))?;
                 conditions.push(smt::TermX::eq(
@@ -264,8 +265,8 @@ impl PermissionX {
                     current_idx,
                 )?;
 
-                let mut_name = &mut_ref.get_base_mutable().ok_or(Error::spanned(
-                    mut_ref.span,
+                let mut_name = &mut_ref.get_base_mutable().ok_or(SpannedError::spanned(
+                    &mut_ref.span,
                     format!("deref should not occur in permissions"),
                 ))?;
 
@@ -305,8 +306,8 @@ impl PermissionX {
                     current_idx,
                 )?;
 
-                let mut_name = &mut_ref.get_base_mutable().ok_or(Error::spanned(
-                    mut_ref.span,
+                let mut_name = &mut_ref.get_base_mutable().ok_or(SpannedError::spanned(
+                    &mut_ref.span,
                     format!("deref should not occur in permissions"),
                 ))?;
 
@@ -820,7 +821,7 @@ impl PermJudgment {
         options: &PermInferOptions,
         ctx: &Ctx,
         solver: &mut smt::Solver,
-    ) -> Result<Option<smt::SynthModel>, Error> {
+    ) -> Result<Option<smt::SynthModel>, SpannedError> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut smt_constraints = Vec::new();
 
@@ -838,7 +839,7 @@ impl PermJudgment {
         // Send solver commands
         solver
             .push()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         // Send a dummy synth-fun to enable feasibility checking even when there is no
         // permission variable
@@ -850,50 +851,50 @@ impl PermJudgment {
                 smt::Sort::Bool,
                 None,
             ))
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         for cmd in PermJudgment::generate_sygus_prelude() {
             solver
                 .send_command(cmd)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         for cmd in smt_ctx.to_commands() {
             solver
                 .send_command(cmd)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         for constraint in &interp.constraints {
             solver
                 .assume(constraint)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         for smt_constraint in smt_constraints {
             solver
                 .constraint(smt_constraint)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         let result = match solver
             .check_synth()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?
         {
             smt::CheckSynthResult::Infeasible => Ok(None), // no solution possible
-            smt::CheckSynthResult::Fail => Error::new_err(format!("solver failed to synthesize")),
+            smt::CheckSynthResult::Fail => SpannedError::new_err(format!("solver failed to synthesize")),
             smt::CheckSynthResult::Synthesized(model) => Ok(Some(model)),
         };
 
         solver
             .pop()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         result
     }
 
     // Check the validity of a single judgments with no permission variables
-    pub fn check_validity(&self, ctx: &Ctx, solver: &mut smt::Solver) -> Result<bool, Error> {
+    pub fn check_validity(&self, ctx: &Ctx, solver: &mut smt::Solver) -> Result<bool, SpannedError> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut interp =
             Interpretation::new(&mut smt_ctx, &PermInferOptions::default(), ctx, false);
@@ -903,36 +904,36 @@ impl PermJudgment {
         // Send solver commands
         solver
             .push()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         for cmd in smt_ctx.to_commands() {
             solver
                 .send_command(cmd)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         for constraint in interp.constraints {
             solver
                 .assert(constraint)
-                .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
         }
 
         solver
             .assert(smt::TermX::not(validity))
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         let result = match solver
             .check_sat()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?
         {
             smt::CheckSatResult::Sat => Ok(false),
             smt::CheckSatResult::Unsat => Ok(true),
-            smt::CheckSatResult::Unknown => Error::new_err(format!("solver returned unknown")),
+            smt::CheckSatResult::Unknown => SpannedError::new_err(format!("solver returned unknown")),
         };
 
         solver
             .pop()
-            .map_err(|msg| Error::new(format!("solver error: {}", msg)))?;
+            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
         result
     }
@@ -947,7 +948,7 @@ impl PermJudgment {
         ctx: &Ctx,
         interp: &mut Interpretation,
         sygus: bool,
-    ) -> Result<smt::Term, Error> {
+    ) -> Result<smt::Term, SpannedError> {
         // In an SMT query, (negated) universal variables are skolemized as constants;
         // in a SyGuS query, universal variables are declared using (declare-var ...)
         let mut fresh_universal_var = |prefix, sort| {
@@ -1006,7 +1007,7 @@ impl PermConstraintX {
         smt_ctx: &mut EncodingCtx,
         ctx: &Ctx,
         interp: &Interpretation,
-    ) -> Result<smt::Term, Error> {
+    ) -> Result<smt::Term, SpannedError> {
         match self {
             PermConstraintX::LessEq(p1, p2) => {
                 // Does there exists a mutable, a fraction index, and indices such that

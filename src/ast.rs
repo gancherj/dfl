@@ -7,6 +7,7 @@ use crate::span::*;
 
 /// Macro for defining string types like
 /// pub struct $NAME(Rc<str>);
+#[macro_export]
 macro_rules! rc_str_type {
     ($typ_name:ident, $fmt_pattern:expr) => {
         #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -314,7 +315,7 @@ impl Ctx {
                     ctx.chans.insert(
                         decl.name.clone(),
                         Spanned::spanned_option(
-                            decl.span,
+                            &decl.span,
                             ChanDeclX {
                                 name: decl.name.clone(),
                                 typ: decl.typ.clone(),
@@ -344,13 +345,13 @@ impl Ctx {
                         for mut_name in ctx.muts.keys() {
                             // Add write permission to mut_name
                             new_res.push(Spanned::spanned_option(
-                                decl.span,
+                                &decl.span,
                                 ProcResourceX::Perm(Spanned::spanned_option(
-                                    decl.span,
+                                    &decl.span,
                                     PermissionX::Fraction(
                                         PermFraction::Write(0),
                                         Spanned::spanned_option(
-                                            decl.span,
+                                            &decl.span,
                                             MutReferenceX::Base(mut_name.clone()),
                                         ),
                                     ),
@@ -360,11 +361,11 @@ impl Ctx {
 
                         for chan_name in ctx.chans.keys() {
                             new_res.push(Spanned::spanned_option(
-                                decl.span,
+                                &decl.span,
                                 ProcResourceX::Input(chan_name.clone()),
                             ));
                             new_res.push(Spanned::spanned_option(
-                                decl.span,
+                                &decl.span,
                                 ProcResourceX::Output(chan_name.clone()),
                             ));
                         }
@@ -372,7 +373,7 @@ impl Ctx {
                         for res in &decl.res {
                             let res_subst = match &res.x {
                                 ProcResourceX::Perm(p) => Spanned::spanned_option(
-                                    res.span,
+                                    &res.span,
                                     ProcResourceX::Perm(PermissionX::substitute(p, &subst)),
                                 ),
                                 _ => res.clone(),
@@ -396,7 +397,7 @@ impl Ctx {
                     ctx.procs.insert(
                         decl.name.clone(),
                         Spanned::spanned_option(
-                            decl.span,
+                            &decl.span,
                             ProcDeclX {
                                 name: decl.name.clone(),
                                 params: decl.params.iter().map(|p| p.clone()).collect(),
@@ -558,7 +559,7 @@ impl TermX {
                 let m_subst = MutReferenceX::substitute_inplace(m, subst);
                 if m_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::Ref(m_subst.unwrap()),
                     ))
                 } else {
@@ -571,7 +572,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::Add(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -587,7 +588,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::BVAdd(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -603,7 +604,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::Mul(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -619,7 +620,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::BVMul(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -635,7 +636,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::And(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -651,7 +652,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::Less(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -667,7 +668,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::BVULT(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -683,7 +684,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::BVSLT(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -699,7 +700,7 @@ impl TermX {
 
                 if t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        term.borrow().span,
+                        &term.borrow().span,
                         TermX::Equal(
                             t1_subst.unwrap_or(t1.clone()),
                             t2_subst.unwrap_or(t2.clone()),
@@ -710,7 +711,7 @@ impl TermX {
                 }
             }
             TermX::Not(t) => Self::substitute_inplace(t, subst)
-                .map(|t| Spanned::spanned_option(term.borrow().span, TermX::Not(t))),
+                .map(|t| Spanned::spanned_option(&term.borrow().span, TermX::Not(t))),
         }
     }
 
@@ -899,7 +900,7 @@ impl MutReferenceX {
                 let t_subst = TermX::substitute_inplace(t, subst);
                 if t_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        mut_ref.borrow().span,
+                        &mut_ref.borrow().span,
                         MutReferenceX::Deref(t_subst.unwrap()),
                     ))
                 } else {
@@ -911,7 +912,7 @@ impl MutReferenceX {
                 let t_subst = TermX::substitute_inplace(t, subst);
                 if m_subst.is_some() || t_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        mut_ref.borrow().span,
+                        &mut_ref.borrow().span,
                         MutReferenceX::Index(
                             m_subst.unwrap_or(m.clone()),
                             t_subst.unwrap_or(t.clone()),
@@ -933,7 +934,7 @@ impl MutReferenceX {
                     .flatten();
                 if m_subst.is_some() || t1_subst.is_some() || t2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        mut_ref.borrow().span,
+                        &mut_ref.borrow().span,
                         MutReferenceX::Slice(
                             m_subst.unwrap_or(m.clone()),
                             if t1.is_some() {
@@ -959,11 +960,11 @@ impl MutReferenceX {
     // pub fn substitute_deref_with_mut_name(mut_ref: impl Borrow<MutReference>, name: &MutName) -> MutReference {
     //     match &mut_ref.borrow().x {
     //         MutReferenceX::Base(..) => mut_ref.borrow().clone(),
-    //         MutReferenceX::Deref(..) => Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Base(name.clone())),
+    //         MutReferenceX::Deref(..) => Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Base(name.clone())),
     //         MutReferenceX::Index(m, t) =>
-    //             Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
+    //             Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
     //         MutReferenceX::Slice(m, t1, t2) =>
-    //             Spanned::spanned_option(mut_ref.borrow().span, MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
+    //             Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
     //     }
     // }
 }
@@ -1149,7 +1150,7 @@ impl PermissionX {
 
                 if p1_subst.is_some() || p2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        perm.borrow().span,
+                        &perm.borrow().span,
                         PermissionX::Add(
                             p1_subst.unwrap_or(p1.clone()),
                             p2_subst.unwrap_or(p2.clone()),
@@ -1165,7 +1166,7 @@ impl PermissionX {
 
                 if p1_subst.is_some() || p2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        perm.borrow().span,
+                        &perm.borrow().span,
                         PermissionX::Sub(
                             p1_subst.unwrap_or(p1.clone()),
                             p2_subst.unwrap_or(p2.clone()),
@@ -1182,7 +1183,7 @@ impl PermissionX {
 
                 if t_subst.is_some() || p1_subst.is_some() || p2_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        perm.borrow().span,
+                        &perm.borrow().span,
                         PermissionX::Ite(
                             t_subst.unwrap_or(t.clone()),
                             p1_subst.unwrap_or(p1.clone()),
@@ -1197,7 +1198,7 @@ impl PermissionX {
                 let mut_ref_subst = MutReferenceX::substitute_inplace(mut_ref, subst);
                 if mut_ref_subst.is_some() {
                     Some(Spanned::spanned_option(
-                        perm.borrow().span,
+                        &perm.borrow().span,
                         PermissionX::Fraction(*frac, mut_ref_subst.unwrap()),
                     ))
                 } else {
@@ -1220,7 +1221,7 @@ impl PermissionX {
 
                 if modified {
                     Some(Spanned::spanned_option(
-                        perm.borrow().span,
+                        &perm.borrow().span,
                         PermissionX::Var(v.clone(), terms_subst),
                     ))
                 } else {

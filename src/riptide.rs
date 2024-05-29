@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::ast::{Program, ConstDeclX, BaseType};
 use crate::span::Spanned;
-use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutName, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcResource, ProcResourceX, ProcX, Term, TermType, TermTypeX, TermX, Var};
+use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutName, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam, ProcResource, ProcResourceX, ProcX, Term, TermType, TermTypeX, TermX, Var};
 
 pub type ChannelId = u32;
 pub type OperatorId = u32;
@@ -124,6 +124,7 @@ pub enum OperatorKind {
     Add,
     Ult,
     Carry(bool),
+    Inv(bool),
     Steer(bool),
     Ld,
     LdSync,
@@ -168,11 +169,17 @@ impl OperatorKind {
                 Some(pred) => Err(format!("unknown predicate `{}` for carry", pred)),
                 None => Err(format!("predicate not specified for carry"))
             }
+            "CF_CFG_OP_INVARIANT" => match &raw.pred {
+                Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Inv(true)),
+                Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Inv(false)),
+                Some(pred) => Err(format!("unknown predicate `{}` for invariant", pred)),
+                None => Err(format!("predicate not specified for invariant"))
+            }
             "CF_CFG_OP_STEER" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Steer(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Steer(false)),
-                Some(pred) => Err(format!("unknown predicate `{}` for carry", pred)),
-                None => Err(format!("predicate not specified for carry"))
+                Some(pred) => Err(format!("unknown predicate `{}` for steer", pred)),
+                None => Err(format!("predicate not specified for steer"))
             }
             "MEM_CFG_OP_LOAD" => match raw.inputs.len() {
                 2 => Ok(OperatorKind::Ld),
@@ -355,7 +362,7 @@ impl Graph {
         }
     }
 
-    fn send_to_outputs(word_width: BitVecWidth, op: &Operator, port: PortIndex, term: impl Borrow<Term>, k: impl Borrow<Proc>) -> Proc {
+    fn send_to_outputs(op: &Operator, port: PortIndex, term: impl Borrow<Term>, k: impl Borrow<Proc>) -> Proc {
         let mut proc = k.borrow().clone();
         for output in op.outputs(port) {
             proc = ProcX::send(Self::channel_name(output), term.borrow().clone(), proc);
@@ -512,6 +519,22 @@ impl Graph {
                             }
                         }
 
+                    OperatorKind::Inv(..) => {
+                        // Inv is polymorphic on the type of the first input
+                        if let Some(input) = op.inputs.get(1) {
+                            if chan_types.contains_key(&input.id()) {
+                                // Propagate type to outputs
+                                for output in op.outputs(0) {
+                                    if !chan_types.contains_key(&output.id()) {
+                                        chan_types.insert(output.id(), chan_types[&input.id()].clone());
+                                        // println!("channel {}: {}", output.id(), chan_types[&input.id()].clone());
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     OperatorKind::Steer(..) => {
                         // Steer is polymorphic on the type of the first input
                         if let Some(input) = op.inputs.get(1) {
@@ -524,7 +547,6 @@ impl Graph {
                                         changed = true;
                                     }
                                 }
-                                break
                             }
                         }
                     }
@@ -539,7 +561,7 @@ impl Graph {
         // Generate channels
         for chan in &self.chans {
             if !chan_types.contains_key(&chan.id()) {
-                return Err(format!("unable to infer the type of channel {}", chan.id()));
+                return Err(format!("unable to infer the type of channel {:?}", chan));
             }
 
             let chan_type = &chan_types[&chan.id()];
@@ -598,7 +620,7 @@ impl Graph {
                         name: name.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(word_width, op, 0, "a",
                             Self::recv_from_input(word_width, op, 1, "b",
-                            Self::send_to_outputs(word_width, op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")),
+                            Self::send_to_outputs(op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")),
                             recurse))),
                     })),
 
@@ -609,9 +631,9 @@ impl Graph {
                             Self::recv_from_input(word_width, op, 1, "b",
                             ProcX::ite(
                                 TermX::bvult(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(1, word_width),
+                                Self::send_to_outputs(op, 0, TermX::bit_vec(1, word_width),
                                     recurse.clone()),
-                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                                Self::send_to_outputs(op, 0, TermX::bit_vec(0, word_width),
                                     recurse.clone()),
                             ))),
                     })),
@@ -622,7 +644,7 @@ impl Graph {
                         body: Self::recv_from_input(word_width, op, 0, "r",
                             Self::recv_from_input(word_width, op, 1, "i",
                             ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
-                            Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                            Self::send_to_outputs(op, 0, TermX::var("v"),
                             recurse)))),
                     })),
 
@@ -633,7 +655,7 @@ impl Graph {
                             Self::recv_from_input(word_width, op, 1, "i",
                             Self::recv_from_input(word_width, op, 2, "s",
                             ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
-                            Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                            Self::send_to_outputs(op, 0, TermX::var("v"),
                             recurse))))),
                     })),
 
@@ -644,7 +666,7 @@ impl Graph {
                             Self::recv_from_input(word_width, op, 1, "i",
                             Self::recv_from_input(word_width, op, 2, "v",
                             ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
-                            Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                            Self::send_to_outputs(op, 0, TermX::bit_vec(0, word_width),
                             recurse.clone()))))),
                     })),
 
@@ -656,7 +678,7 @@ impl Graph {
                             Self::recv_from_input(word_width, op, 2, "v",
                             Self::recv_from_input(word_width, op, 3, "s",
                             ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
-                            Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                            Self::send_to_outputs(op, 0, TermX::bit_vec(0, word_width),
                             recurse)))))),
                     })),
 
@@ -671,11 +693,42 @@ impl Graph {
                                 } else {
                                     TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width))
                                 },
-                                Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                                Self::send_to_outputs(op, 0, TermX::var("v"),
                                     recurse.clone()),
                                 recurse.clone(),
                             ))),
                     })),
+
+                OperatorKind::Inv(pred) => {
+                    let state1: ProcName = name.clone();
+                    let state2: ProcName = format!("{}Loop", name).into();
+
+                    let inv_type = &chan_types[&op.inputs[1].id()];
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state1.clone(), params: vec![], res: res.clone(), all_res: false,
+                        body: Self::recv_from_input(word_width, op, 1, "a",
+                            Self::send_to_outputs(op, 0, TermX::var("a"),
+                            ProcX::call(state2.clone(), [TermX::var("a")]))),
+                    }));
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state2.clone(),
+                        params: vec![ProcParam { name: "a".into(), typ: inv_type.clone() }],
+                        res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "d",
+                            ProcX::ite(
+                                if pred {
+                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width)))
+                                } else {
+                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width))
+                                },
+                                Self::send_to_outputs(op, 0, TermX::var("a"),
+                                    ProcX::call(state2.clone(), [TermX::var("a")])),
+                                ProcX::call(state1.clone(), [] as [Term; 0]),
+                            )),
+                    }));
+                }
 
                 OperatorKind::Carry(pred) => {
                     let state1: ProcName = name.clone();
@@ -684,7 +737,7 @@ impl Graph {
                     procs.push(Spanned::new(ProcDeclX {
                         name: state1.clone(), params: vec![], res: res.clone(), all_res: false,
                         body: Self::recv_from_input(word_width, op, 1, "a",
-                            Self::send_to_outputs(word_width, op, 0, TermX::var("a"),
+                            Self::send_to_outputs(op, 0, TermX::var("a"),
                             ProcX::call(state2.clone(), [] as [Term; 0]))),
                     }));
 
@@ -698,7 +751,7 @@ impl Graph {
                                     TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width))
                                 },
                                 Self::recv_from_input(word_width, op, 2, "b",
-                                    Self::send_to_outputs(word_width, op, 0, TermX::var("b"),
+                                    Self::send_to_outputs(op, 0, TermX::var("b"),
                                     ProcX::call(state2.clone(), [] as [Term; 0]))),
                                 ProcX::call(state1.clone(), [] as [Term; 0]),
                             )),
@@ -734,6 +787,7 @@ impl fmt::Display for OperatorKind {
             OperatorKind::Add => write!(f, "Add"),
             OperatorKind::Ult => write!(f, "Ult"),
             OperatorKind::Carry(pred) => write!(f, "Carry{}", if *pred { "T" } else { "F" }),
+            OperatorKind::Inv(pred) => write!(f, "Inv{}", if *pred { "T" } else { "F" }),
             OperatorKind::Steer(pred) => write!(f, "Steer{}", if *pred { "T" } else { "F" }),
             OperatorKind::Ld => write!(f, "Ld"),
             OperatorKind::LdSync => write!(f, "LdSync"),

@@ -4,7 +4,10 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::span::*;
 
-grammar;
+grammar(
+    path: &FilePath,
+    src: &Source,
+);
 
 match {
     r"\s*" => {}, // The default whitespace skipping is disabled if an `ignore pattern` is specified
@@ -91,109 +94,109 @@ MutReferenceType: MutReferenceType = {
 }
 
 MutReference: MutReference = {
-    <start:@L> <name:MutName> <end:@R> => Spanned::spanned(start, end, MutReferenceX::Base(name)),
-    <start:@L> "*" <t:AtomicTerm> <end:@R> => Spanned::spanned(start, end, MutReferenceX::Deref(t)),
-    <start:@L> <m:MutReference> "[" <i:Term> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Index(m, i)),
-    <start:@L> <m:MutReference> "[" <i1:Term?> ".." <i2:Term?> "]" <end:@R> => Spanned::spanned(start, end, MutReferenceX::Slice(m, i1, i2)),
+    <start:@L> <name:MutName> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, MutReferenceX::Base(name)),
+    <start:@L> "*" <t:AtomicTerm> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, MutReferenceX::Deref(t)),
+    <start:@L> <m:MutReference> "[" <i:Term> "]" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, MutReferenceX::Index(m, i)),
+    <start:@L> <m:MutReference> "[" <i1:Term?> ".." <i2:Term?> "]" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, MutReferenceX::Slice(m, i1, i2)),
 }
 
 PermissionReset = <Permission>;
 Permission: Permission = {
     #[precedence(level = "0")]
-    <start:@L> <v:PermVar> "(" <ts:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(start, end, PermissionX::Var(v, ts)),
-    <start:@L> "empty" <end:@R> => Spanned::spanned(start, end, PermissionX::Empty),
-    <start:@L> <f:PermFraction> <r:MutReference> <end:@R> => Spanned::spanned(start, end, PermissionX::Fraction(f, r)),
-    <start:@L> "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" <end:@R> => Spanned::spanned(start, end, PermissionX::Ite(t, p1, p2)),
+    <start:@L> <v:PermVar> "(" <ts:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Var(v, ts)),
+    <start:@L> "empty" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Empty),
+    <start:@L> <f:PermFraction> <r:MutReference> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Fraction(f, r)),
+    <start:@L> "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Ite(t, p1, p2)),
     "(" <p:PermissionReset> ")" => p,
 
     #[precedence(level = "1")]
     #[assoc(side="left")]
-    <start:@L> <p1:Permission> "+" <p2:Permission> <end:@R> => Spanned::spanned(start, end, PermissionX::Add(p1, p2)),
+    <start:@L> <p1:Permission> "+" <p2:Permission> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Add(p1, p2)),
 }
 
 TermReset = <Term>;
 AtomicTerm: Term = {
-    <start:@L> <v:Var> <end:@R> => Spanned::spanned(start, end, TermX::Var(v)), // Both variables and constants are parsed as variables first, and constants are then converted later
-    <start:@L> <b:Bool> <end:@R> => Spanned::spanned(start, end, TermX::Bool(b)),
-    <start:@L> <i:Int> <end:@R> => Spanned::spanned(start, end, TermX::Int(i)),
-    <start:@L> <i:BitVec> <end:@R> => Spanned::spanned(start, end, TermX::BitVec(i.0, i.1)),
+    <start:@L> <v:Var> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Var(v)), // Both variables and constants are parsed as variables first, and constants are then converted later
+    <start:@L> <b:Bool> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Bool(b)),
+    <start:@L> <i:Int> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Int(i)),
+    <start:@L> <i:BitVec> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BitVec(i.0, i.1)),
     "(" <t:TermReset> ")" => t,
 }
 Term: Term = {
     #[precedence(level = "0")]
     AtomicTerm,
-    <start:@L> "&" <m:MutReference> <end:@R> => Spanned::spanned(start, end, TermX::Ref(m)),
+    <start:@L> "&" <m:MutReference> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Ref(m)),
 
     #[precedence(level = "1")]
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "*" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Mul(t1, t2)),
+    <start:@L> <t1:Term> "*" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Mul(t1, t2)),
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "*bv" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVMul(t1, t2)),
+    <start:@L> <t1:Term> "*bv" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVMul(t1, t2)),
 
     #[precedence(level = "2")]
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "+" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Add(t1, t2)),
+    <start:@L> <t1:Term> "+" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Add(t1, t2)),
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "+bv" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVAdd(t1, t2)),
+    <start:@L> <t1:Term> "+bv" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVAdd(t1, t2)),
 
     #[precedence(level = "3")]
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Less(t1, t2)),
+    <start:@L> <t1:Term> "<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Less(t1, t2)),
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "u<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVULT(t1, t2)),
+    <start:@L> <t1:Term> "u<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVULT(t1, t2)),
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "s<" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::BVSLT(t1, t2)),
+    <start:@L> <t1:Term> "s<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSLT(t1, t2)),
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "=" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::Equal(t1, t2)),
+    <start:@L> <t1:Term> "=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Equal(t1, t2)),
 
     #[precedence(level = "4")]
-    <start:@L> "not" <t:Term> <end:@R> => Spanned::spanned(start, end, TermX::Not(t)),
+    <start:@L> "not" <t:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Not(t)),
     
     #[precedence(level = "5")]
     #[assoc(side="left")]
-    <start:@L> <t1:Term> "and" <t2:Term> <end:@R> => Spanned::spanned(start, end, TermX::And(t1, t2)),
+    <start:@L> <t1:Term> "and" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::And(t1, t2)),
 }
 
 ProcReset = <Proc>;
 Proc: Proc = {
     #[precedence(level = "0")]
-    <start:@L> "skip" ";"? <end:@R> => Spanned::spanned(start, end, ProcX::Skip),
-    <start:@L> "send" <t:Term> "->" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "recv" <x:Var> "<-" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "write" <t:Term> "->" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "read" <x:Var> "<-" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "skip" ";"? <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Skip),
+    <start:@L> "send" <t:Term> "->" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "recv" <x:Var> "<-" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "write" <t:Term> "->" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "read" <x:Var> "<-" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
 
-    <start:@L> "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" <end:@R> => Spanned::spanned(start, end, ProcX::Ite(t, k1, k2)),
-    <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Skip))),
-    <start:@L> <p:ProcName> "(" <args:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(start, end, ProcX::Call(p, args)),
+    <start:@L> "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k1, k2)),
+    <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Skip))),
+    <start:@L> <p:ProcName> "(" <args:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Call(p, args)),
 
     "(" <p:ProcReset> ")" => p,
 
     #[precedence(level = "1")]
     #[assoc(side="right")]
-    <start:@L> <k1:Proc> "||" <k2:Proc> <end:@R> => Spanned::spanned(start, end, ProcX::Par(k1, k2)),
+    <start:@L> <k1:Proc> "||" <k2:Proc> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Par(k1, k2)),
 }
 
 ProcResource: ProcResource = {
-    <start:@L> <p:Permission> <end:@R> => Spanned::spanned(start, end, ProcResourceX::Perm(p)),
-    <start:@L> "in" <n:ChanName> <end:@R> => Spanned::spanned(start, end, ProcResourceX::Input(n)),
-    <start:@L> "out" <n:ChanName> <end:@R> => Spanned::spanned(start, end, ProcResourceX::Output(n)),
+    <start:@L> <p:Permission> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcResourceX::Perm(p)),
+    <start:@L> "in" <n:ChanName> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcResourceX::Input(n)),
+    <start:@L> "out" <n:ChanName> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcResourceX::Output(n)),
 }
 
 Decl: Decl = {
-    <start:@L> "const" <n:Const> ":" <t:BaseType> <end:@R> => Decl::Const(Spanned::spanned(start, end, ConstDeclX { name: n, typ: t })),
-    <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => Decl::Perm(Spanned::spanned(start, end, PermDeclX { name: v, param_typs: p })),
-    <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => Decl::Mut(Spanned::spanned(start, end, MutDeclX { name: n, typ: t })),
+    <start:@L> "const" <n:Const> ":" <t:BaseType> <end:@R> => Decl::Const(Spanned::spanned(path.clone(), src.clone(), start, end, ConstDeclX { name: n, typ: t })),
+    <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => Decl::Perm(Spanned::spanned(path.clone(), src.clone(), start, end, PermDeclX { name: v, param_typs: p })),
+    <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => Decl::Mut(Spanned::spanned(path.clone(), src.clone(), start, end, MutDeclX { name: n, typ: t })),
     <start:@L> "chan" <n:ChanName> ":" <t:TermType> "|" <p:Permission> <end:@R> =>
-        Decl::Chan(Spanned::spanned(start, end, ChanDeclX { name: n, typ: t, perm: p })),
+        Decl::Chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: p })),
     <start:@L> "chan" <n:ChanName> ":" <t:TermType> <end:@R> =>
-        Decl::Chan(Spanned::spanned(start, end, ChanDeclX { name: n, typ: t, perm: Spanned::spanned(end, end, PermissionX::Empty) })),
+        Decl::Chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: Spanned::spanned(path.clone(), src.clone(), end, end, PermissionX::Empty) })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" "|" <r:CommaSep<ProcResource>> <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(start, end, ProcDeclX { name: n, params: p, res: r, all_res: false, body: b })),
+        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: r, all_res: false, body: b })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: false, body: b })),
+        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: false, body: b })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" "|" "all" <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: true, body: b })),
+        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: true, body: b })),
 }
 
 pub Program: Program = { Decl* => Program { decls: <> } }
