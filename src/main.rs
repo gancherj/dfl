@@ -1,4 +1,3 @@
-use core::fmt;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::{fs, io::BufReader};
@@ -17,7 +16,8 @@ use crate::error::Error;
 
 use clap::{command, Parser};
 use error::SpannedError;
-use lalrpop_util::{lalrpop_mod, ParseError};
+use lalrpop_util::lalrpop_mod;
+use riptide::TranslationOptions;
 use span::{FilePath, Source};
 
 lalrpop_mod!(pub syntax);
@@ -70,12 +70,12 @@ fn type_check(mut args: Args) -> Result<(), Error> {
 
         // Translate from RipTide dataflow graph
         Some(b"o2p") => {
-            let o2p_file = fs::File::open(path.as_str()).unwrap();
+            let o2p_file = fs::File::open(path.as_str())?;
             let reader = BufReader::new(o2p_file);
-            let graph = Graph::from_reader(reader).unwrap();
-            println!("parsed: {:?}", graph);
+            let graph = Graph::from_reader(reader)?;
+            // println!("parsed: {:?}", graph);
             // println!("{}", graph.to_program(32).unwrap());
-            let program = graph.to_program(32)?;
+            let program = graph.to_program(&TranslationOptions { word_width: 32 })?;
 
             println!("{}", program);
             program

@@ -134,6 +134,10 @@ impl TermX {
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,
             )),
+            TermX::BVSGT(t1, t2) => Ok(smt::TermX::bvsgt(
+                TermX::as_smt_term(t1, interp)?,
+                TermX::as_smt_term(t2, interp)?,
+            )),
             TermX::And(t1, t2) => Ok(smt::TermX::and([
                 TermX::as_smt_term(t1, interp)?,
                 TermX::as_smt_term(t2, interp)?,

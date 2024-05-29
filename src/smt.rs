@@ -352,6 +352,10 @@ impl TermX {
         TermX::app("bvslt", [a.borrow(), b.borrow()])
     }
 
+    pub fn bvsgt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvsgt", [a.borrow(), b.borrow()])
+    }
+
     pub fn lt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("<", [a.borrow(), b.borrow()])
     }

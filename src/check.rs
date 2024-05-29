@@ -619,7 +619,7 @@ impl TermX {
                     SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
                 }
             }
-            TermX::BVULT(t1, t2) | TermX::BVSLT(t1, t2) => {
+            TermX::BVULT(t1, t2) | TermX::BVSLT(t1, t2) | TermX::BVSGT(t1, t2) => {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;
                 if typ1 == typ2 && typ1.is_bv() {

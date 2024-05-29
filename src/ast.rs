@@ -133,6 +133,7 @@ pub enum TermX {
     BVMul(Term, Term),
     BVULT(Term, Term),
     BVSLT(Term, Term),
+    BVSGT(Term, Term),
 
     Equal(Term, Term),
     And(Term, Term),
@@ -539,6 +540,14 @@ impl TermX {
         Spanned::new(TermX::BVULT(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn bvslt(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVSLT(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvsgt(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVSGT(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn eq(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::Equal(t1.borrow().clone(), t2.borrow().clone()))
     }
@@ -694,6 +703,22 @@ impl TermX {
                     None
                 }
             }
+            TermX::BVSGT(t1, t2) => {
+                let t1_subst = Self::substitute_inplace(t1, subst);
+                let t2_subst = Self::substitute_inplace(t2, subst);
+
+                if t1_subst.is_some() || t2_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        &term.borrow().span,
+                        TermX::BVSGT(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
             TermX::Equal(t1, t2) => {
                 let t1_subst = Self::substitute_inplace(t1, subst);
                 let t2_subst = Self::substitute_inplace(t2, subst);
@@ -764,6 +789,10 @@ impl TermX {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
+            TermX::BVSGT(t1, t2) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+            }
             TermX::Equal(t1, t2) => {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
@@ -797,6 +826,7 @@ impl TermX {
             TermX::Less(..) => 3,
             TermX::BVULT(..) => 3,
             TermX::BVSLT(..) => 3,
+            TermX::BVSGT(..) => 3,
             TermX::Equal(..) => 3,
             TermX::Not(..) => 4,
         }
@@ -1495,6 +1525,19 @@ impl fmt::Display for TermX {
                     write!(f, " s< {}", t2)?;
                 } else {
                     write!(f, " s< ({})", t2)?;
+                }
+                Ok(())
+            }
+            TermX::BVSGT(t1, t2) => {
+                if t1.precedence() <= self.precedence() {
+                    write!(f, "{}", t1)?;
+                } else {
+                    write!(f, "({})", t1)?;
+                }
+                if t2.precedence() <= self.precedence() {
+                    write!(f, " s> {}", t2)?;
+                } else {
+                    write!(f, " s> ({})", t2)?;
                 }
                 Ok(())
             }
