@@ -538,6 +538,10 @@ impl TermX {
         Spanned::new(TermX::BVULT(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn eq(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::Equal(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn not(t: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::Not(t.borrow().clone()))
     }
@@ -818,6 +822,10 @@ impl MutTypeX {
 impl MutReferenceX {
     pub fn base(name: impl Into<MutName>) -> MutReference {
         Spanned::new(MutReferenceX::Base(name.into()))
+    }
+
+    pub fn deref(term: impl Borrow<Term>) -> MutReference {
+        Spanned::new(MutReferenceX::Deref(term.borrow().clone()))
     }
 
     pub fn index(m: impl Borrow<MutReference>, i: impl Borrow<Term>) -> MutReference {
@@ -1697,11 +1705,15 @@ impl fmt::Display for ProcDeclX {
         }
         write!(f, ")")?;
 
-        for (i, res) in self.res.iter().enumerate() {
-            if i == 0 {
-                write!(f, " | {}", res)?;
-            } else {
-                write!(f, ", {}", res)?;
+        if self.all_res {
+            write!(f, " | all")?;
+        } else {
+            for (i, res) in self.res.iter().enumerate() {
+                if i == 0 {
+                    write!(f, " | {}", res)?;
+                } else {
+                    write!(f, ", {}", res)?;
+                }
             }
         }
 

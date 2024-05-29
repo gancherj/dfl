@@ -109,6 +109,14 @@ impl ChannelX {
             ChannelX::Param { hold, .. } => *hold,
         }
     }
+
+    pub fn is_constant(&self) -> bool {
+        match self {
+            ChannelX::Async { .. } => false,
+            ChannelX::Const { .. } => true,
+            ChannelX::Param { .. } => true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -287,7 +295,7 @@ impl Graph {
     }
 
     fn channel_name(chan: &Channel) -> ChanName {
-        format!("c{}", chan.id()).into()
+        format!("C{}", chan.id()).into()
     }
 
     fn proc_name(op: &Operator) -> ProcName {
@@ -557,6 +565,16 @@ impl Graph {
             }))
         }
 
+        // Generate entry point process
+        // which would push all constant, non-hold values
+        let mut entry_proc = ProcX::skip();
+
+        for chan in &self.chans {
+            if chan.is_constant() && !chan.is_hold() {
+                entry_proc = ProcX::send(Self::channel_name(chan), Self::const_channel_to_term(word_width, chan), entry_proc);
+            }
+        }
+
         // Generate concrete processes
         for op in &self.ops {
             let name = Self::proc_name(op);
@@ -570,36 +588,134 @@ impl Graph {
             let mut res = vec![ProcResourceX::perm(PermissionX::var(perm_var, [] as [Term; 0]))];
             res.extend(Self::gen_io_resources(op));
 
+            let recurse = ProcX::call(name.clone(), [] as [Term; 0]);
+
+            entry_proc = ProcX::par(recurse.clone(), entry_proc);
+
             match op.kind {
                 OperatorKind::Add =>
                     procs.push(Spanned::new(ProcDeclX {
-                        name, params: vec![], res, all_res: false,
+                        name: name.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(word_width, op, 0, "a",
                             Self::recv_from_input(word_width, op, 1, "b",
-                            Self::send_to_outputs(word_width, op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")), ProcX::skip()))),
+                            Self::send_to_outputs(word_width, op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")),
+                            recurse))),
                     })),
 
                 OperatorKind::Ult =>
                     procs.push(Spanned::new(ProcDeclX {
-                        name, params: vec![], res, all_res: false,
+                        name: name.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(word_width, op, 0, "a",
                             Self::recv_from_input(word_width, op, 1, "b",
                             ProcX::ite(
                                 TermX::bvult(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(1, word_width), ProcX::skip()),
-                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width), ProcX::skip()),
+                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(1, word_width),
+                                    recurse.clone()),
+                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                                    recurse.clone()),
                             ))),
                     })),
 
-                _ => {}
-                // OperatorKind::Carry(_) => todo!(),
-                // OperatorKind::Steer(_) => todo!(),
-                // OperatorKind::Ld => todo!(),
-                // OperatorKind::LdSync => todo!(),
-                // OperatorKind::St => todo!(),
-                // OperatorKind::StSync => todo!(),
+                OperatorKind::Ld =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "r",
+                            Self::recv_from_input(word_width, op, 1, "i",
+                            ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
+                            Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                            recurse)))),
+                    })),
+
+                OperatorKind::LdSync =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "r",
+                            Self::recv_from_input(word_width, op, 1, "i",
+                            Self::recv_from_input(word_width, op, 2, "s",
+                            ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
+                            Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                            recurse))))),
+                    })),
+
+                OperatorKind::St =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "r",
+                            Self::recv_from_input(word_width, op, 1, "i",
+                            Self::recv_from_input(word_width, op, 2, "v",
+                            ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
+                            Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                            recurse.clone()))))),
+                    })),
+
+                OperatorKind::StSync =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "r",
+                            Self::recv_from_input(word_width, op, 1, "i",
+                            Self::recv_from_input(word_width, op, 2, "v",
+                            Self::recv_from_input(word_width, op, 3, "s",
+                            ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
+                            Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width),
+                            recurse)))))),
+                    })),
+
+                OperatorKind::Steer(pred) =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "d",
+                            Self::recv_from_input(word_width, op, 1, "v",
+                            ProcX::ite(
+                                if pred {
+                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width)))
+                                } else {
+                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width))
+                                },
+                                Self::send_to_outputs(word_width, op, 0, TermX::var("v"),
+                                    recurse.clone()),
+                                recurse.clone(),
+                            ))),
+                    })),
+
+                OperatorKind::Carry(pred) => {
+                    let state1: ProcName = name.clone();
+                    let state2: ProcName = format!("{}Loop", name).into();
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state1.clone(), params: vec![], res: res.clone(), all_res: false,
+                        body: Self::recv_from_input(word_width, op, 1, "a",
+                            Self::send_to_outputs(word_width, op, 0, TermX::var("a"),
+                            ProcX::call(state2.clone(), [] as [Term; 0]))),
+                    }));
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state2.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "d",
+                            ProcX::ite(
+                                if pred {
+                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width)))
+                                } else {
+                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, word_width))
+                                },
+                                Self::recv_from_input(word_width, op, 2, "b",
+                                    Self::send_to_outputs(word_width, op, 0, TermX::var("b"),
+                                    ProcX::call(state2.clone(), [] as [Term; 0]))),
+                                ProcX::call(state1.clone(), [] as [Term; 0]),
+                            )),
+                    }));
+                }
+                    
             }
         }
+
+        // Finally, generate an entry process `Program`
+        procs.push(Spanned::new(ProcDeclX {
+            name: "Program".into(),
+            params: vec![],
+            res: vec![],
+            all_res: true,
+            body: entry_proc,
+        }));
 
         Ok(Program {
             decls: consts.into_iter().map(|d| Decl::Const(d))

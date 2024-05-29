@@ -77,11 +77,11 @@ fn get_line_col_num(src: &str, offset: usize) -> Option<(usize, usize)> {
 }
 
 fn main() {
-    let o2p_file = fs::File::open("/Users/zhengyao/work/riptide-verification/examples/test-1/test-1.o2p").unwrap();
-    let reader = BufReader::new(o2p_file);
-    let graph = Graph::from_reader(reader).unwrap();
-    println!("parsed: {:?}", graph);
-    println!("{}", graph.to_program(32).unwrap());
+    // let o2p_file = fs::File::open("/Users/zhengyao/work/riptide-verification/examples/test-1/test-1.o2p").unwrap();
+    // let reader = BufReader::new(o2p_file);
+    // let graph = Graph::from_reader(reader).unwrap();
+    // println!("parsed: {:?}", graph);
+    // println!("{}", graph.to_program(32).unwrap());
     
     let mut args = Args::parse();
 
