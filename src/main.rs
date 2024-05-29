@@ -81,7 +81,7 @@ fn main() {
     let reader = BufReader::new(o2p_file);
     let graph = Graph::from_reader(reader).unwrap();
     println!("parsed: {:?}", graph);
-    println!("{}", graph.to_program(32));
+    println!("{}", graph.to_program(32).unwrap());
     
     let mut args = Args::parse();
 

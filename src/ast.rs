@@ -226,6 +226,20 @@ pub struct Ctx {
     pub procs: IndexMap<ProcName, ProcDecl>,
 }
 
+impl ProcResourceX {
+    pub fn input(name: impl Into<ChanName>) -> ProcResource {
+        Spanned::new(ProcResourceX::Input(name.into()))
+    }
+
+    pub fn output(name: impl Into<ChanName>) -> ProcResource {
+        Spanned::new(ProcResourceX::Output(name.into()))
+    }
+
+    pub fn perm(perm: impl Borrow<Permission>) -> ProcResource {
+        Spanned::new(ProcResourceX::Perm(perm.borrow().clone()))
+    }
+}
+
 impl Ctx {
     pub fn new() -> Ctx {
         Ctx {
@@ -416,6 +430,20 @@ impl BaseType {
     }
 }
 
+impl MutReferenceTypeX {
+    pub fn base(name: impl Into<MutName>) -> MutReferenceType {
+        Rc::new(MutReferenceTypeX::Base(name.into()))
+    }
+
+    pub fn index(base: impl Borrow<MutReferenceType>, index: MutReferenceIndex) -> MutReferenceType {
+        Rc::new(MutReferenceTypeX::Index(base.borrow().clone(), index))
+    }
+
+    pub fn offset(base: impl Borrow<MutReferenceType>, offset: MutReferenceIndex) -> MutReferenceType {
+        Rc::new(MutReferenceTypeX::Offset(base.borrow().clone(), offset))
+    }
+}
+
 impl TermTypeX {
     pub fn is_int(&self) -> bool {
         match self {
@@ -475,6 +503,10 @@ impl TermTypeX {
     pub fn bool() -> TermType {
         Rc::new(TermTypeX::Base(BaseType::Bool))
     }
+
+    pub fn mut_ref(ref_types: impl IntoIterator<Item=impl Borrow<MutReferenceType>>) -> TermType {
+        Rc::new(TermTypeX::Ref(ref_types.into_iter().map(|r| r.borrow().clone()).collect()))
+    }
 }
 
 impl TermX {
@@ -492,6 +524,18 @@ impl TermX {
 
     pub fn constant(c: impl Into<Const>) -> Term {
         Spanned::new(TermX::Const(c.into()))
+    }
+
+    pub fn reference(m: impl Borrow<MutReference>) -> Term {
+        Spanned::new(TermX::Ref(m.borrow().clone()))
+    }
+
+    pub fn bvadd(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVAdd(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvult(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVULT(t1.borrow().clone(), t2.borrow().clone()))
     }
 
     pub fn not(t: impl Borrow<Term>) -> Term {
@@ -772,6 +816,18 @@ impl MutTypeX {
 }
 
 impl MutReferenceX {
+    pub fn base(name: impl Into<MutName>) -> MutReference {
+        Spanned::new(MutReferenceX::Base(name.into()))
+    }
+
+    pub fn index(m: impl Borrow<MutReference>, i: impl Borrow<Term>) -> MutReference {
+        Spanned::new(MutReferenceX::Index(m.borrow().clone(), i.borrow().clone()))
+    }
+
+    pub fn slice(m: impl Borrow<MutReference>, i: Option<&Term>, j: Option<&Term>) -> MutReference {
+        Spanned::new(MutReferenceX::Slice(m.borrow().clone(), i.map(|i| i.clone()), j.map(|j| j.clone())))
+    }
+
     /// Check if the mutable reference has a deref or not
     pub fn has_deref(&self) -> bool {
         match self {
@@ -1048,6 +1104,10 @@ impl PermissionX {
 
     pub fn empty() -> Permission {
         Spanned::new(PermissionX::Empty)
+    }
+
+    pub fn var(var: impl Into<PermVar>, terms: impl IntoIterator<Item=impl Borrow<Term>>) -> Permission {
+        Spanned::new(PermissionX::Var(var.into(), terms.into_iter().map(|t| t.borrow().clone()).collect()))
     }
 
     pub fn add(p1: impl Borrow<Permission>, p2: impl Borrow<Permission>) -> Permission {
@@ -1635,17 +1695,17 @@ impl fmt::Display for ProcDeclX {
                 write!(f, ", {}", param)?;
             }
         }
-        write!(f, ") ")?;
+        write!(f, ")")?;
 
         for (i, res) in self.res.iter().enumerate() {
             if i == 0 {
-                write!(f, "| {} ", res)?;
+                write!(f, " | {}", res)?;
             } else {
-                write!(f, ", {} ", res)?;
+                write!(f, ", {}", res)?;
             }
         }
 
-        write!(f, "= {}", self.body)
+        write!(f, " = {}", self.body)
     }
 }
 

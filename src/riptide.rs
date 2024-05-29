@@ -1,5 +1,5 @@
 use std::{borrow::Borrow, rc::Rc};
-use std::io;
+use std::{fmt, io};
 
 use im::HashMap;
 use indexmap::IndexMap;
@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::ast::{Program, ConstDeclX, BaseType};
 use crate::span::Spanned;
-use crate::{BitVecWidth, Decl, MutDeclX, MutTypeX};
+use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutName, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcResource, ProcResourceX, ProcX, Term, TermType, TermTypeX, TermX, Var};
 
 pub type ChannelId = u32;
 pub type OperatorId = u32;
@@ -93,6 +93,24 @@ pub enum ChannelX {
     Param { id: ChannelId, param: Parameter, hold: bool },
 }
 
+impl ChannelX {
+    pub fn id(&self) -> ChannelId {
+        match self {
+            ChannelX::Async { id, .. } => *id,
+            ChannelX::Const { id, .. } => *id,
+            ChannelX::Param { id, .. } => *id,
+        }
+    }
+
+    pub fn is_hold(&self) -> bool {
+        match self {
+            ChannelX::Async { .. } => false,
+            ChannelX::Const { hold, .. } => *hold,
+            ChannelX::Param { hold, .. } => *hold,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum OperatorKind {
     Add,
@@ -143,8 +161,8 @@ impl OperatorKind {
                 None => Err(format!("predicate not specified for carry"))
             }
             "CF_CFG_OP_STEER" => match &raw.pred {
-                Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Carry(true)),
-                Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Carry(false)),
+                Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Steer(true)),
+                Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Steer(false)),
                 Some(pred) => Err(format!("unknown predicate `{}` for carry", pred)),
                 None => Err(format!("predicate not specified for carry"))
             }
@@ -160,6 +178,12 @@ impl OperatorKind {
             }
             _ => Err(format!("unsupported operator `{}`", raw.op)),
         }
+    }
+}
+
+impl OperatorX {
+    pub fn outputs(&self, port: PortIndex) -> impl Iterator<Item=&Channel> {
+        self.outputs.get(&port).map_or([].iter(), |v| v.iter())
     }
 }
 
@@ -262,9 +286,94 @@ impl Graph {
         Ok(Graph { params, chans, ops })
     }
 
-    pub fn to_program(&self, word_width: BitVecWidth) -> Program {
+    fn channel_name(chan: &Channel) -> ChanName {
+        format!("c{}", chan.id()).into()
+    }
+
+    fn proc_name(op: &Operator) -> ProcName {
+        format!("{}{}", op.kind, op.id).into()
+    }
+
+    fn param_name(param: &Parameter) -> Rc<str> {
+        format!("param_{}", param.name).into()
+    }
+
+    fn join_term_types(t1: &TermType, t2: &TermType) -> Result<TermType, String> {
+        match (t1.as_ref(), t2.as_ref()) {
+            (TermTypeX::Base(b1), TermTypeX::Base(b2)) if b1 == b2 => Ok(t1.clone()),
+            (TermTypeX::Ref(refs1), TermTypeX::Ref(refs2)) =>
+                Ok(TermTypeX::mut_ref(refs1.iter().chain(refs2))),
+            _ => Err(format!("unable to join types {} and {}", t1, t2)),
+        }
+    }
+
+    fn const_channel_to_term(word_width: BitVecWidth, chan: &Channel) -> Term {
+        match chan.borrow() {
+            ChannelX::Const { value, .. } =>
+                if *value >= 0 {
+                    TermX::bit_vec(*value as u64, word_width)
+                } else {
+                    TermX::bit_vec(u64::MAX - ((-*value) as u64), word_width)
+                }
+            ChannelX::Param { param, .. } =>
+                match param.typ.as_ref() {
+                    ParamTypeX::Int(..) => TermX::constant(Self::param_name(param)),
+                    ParamTypeX::Pointer(..) =>
+                        if param.alias {
+                            // &mem[param_{name}..]
+                            TermX::reference(MutReferenceX::slice(
+                                MutReferenceX::base("mem"),
+                                Some(&TermX::constant(Self::param_name(param))),
+                                None,
+                            ))
+                        } else {
+                            TermX::reference(MutReferenceX::base(Self::param_name(param)))
+                        }
+                }
+            _ => unreachable!()
+        }
+    }
+
+    fn recv_from_input(word_width: BitVecWidth, op: &Operator, port: usize, var: impl Into<Var>, k: impl Borrow<Proc>) -> Proc {
+        let chan = &op.inputs[port];
+
+        if chan.is_hold() {
+            // If channel is a hold constant, we simply substitute the value in
+            let term = Self::const_channel_to_term(word_width, chan);
+            ProcX::substitute(k, &mut IndexMap::from([(var.into(), term.clone())]))
+        } else {
+            // Else we do a receive
+            ProcX::recv(Self::channel_name(chan), var, k)
+        }
+    }
+
+    fn send_to_outputs(word_width: BitVecWidth, op: &Operator, port: PortIndex, term: impl Borrow<Term>, k: impl Borrow<Proc>) -> Proc {
+        let mut proc = k.borrow().clone();
+        for output in op.outputs(port) {
+            proc = ProcX::send(Self::channel_name(output), term.borrow().clone(), proc);
+        }
+        proc
+    }
+
+    fn gen_io_resources(op: &Operator) -> Vec<ProcResource> {
+        let mut res = Vec::new();
+        for input in &op.inputs {
+            res.push(ProcResourceX::input(Self::channel_name(input)));
+        }
+        for port in op.outputs.keys() {
+            for output in op.outputs(*port) {
+                res.push(ProcResourceX::output(Self::channel_name(output)));
+            }
+        }
+        res
+    }
+
+    pub fn to_program(&self, word_width: BitVecWidth) -> Result<Program, String> {
         let mut consts = Vec::new();
         let mut muts = Vec::new();
+        let mut perms = Vec::new();
+        let mut chans = Vec::new();
+        let mut procs = Vec::new();
 
         let mut has_alias = false;
 
@@ -272,8 +381,11 @@ impl Graph {
         for param in self.params.values() {
             match param.typ.borrow() {
                 ParamTypeX::Int(width) => {
+                    if *width != word_width {
+                        return Err(format!("parameter `{}` has a different width {} from the word width {}", param.name, width, word_width));
+                    }
                     consts.push(Spanned::new(ConstDeclX {
-                        name: format!("param_{}", param.name).into(),
+                        name: Self::param_name(param).into(),
                         typ: BaseType::BitVec(*width),
                     }));
                 }
@@ -282,28 +394,32 @@ impl Graph {
                         ParamTypeX::Int(width) => {
                             if !param.alias {
                                 muts.push(Spanned::new(MutDeclX {
-                                    name: format!("param_{}", param.name).into(),
+                                    name: Self::param_name(param).into(),
                                     typ: MutTypeX::array(
                                         BaseType::BitVec(word_width),
                                         MutTypeX::base(BaseType::BitVec(*width)),
                                     ),
                                 }));
                             } else {
-                                assert!(*width == word_width); // not supported otherwise
+                                if *width != word_width {
+                                    return Err(format!("parameter `{}` points to a different width {} from the word width {}", param.name, width, word_width));
+                                }
                                 has_alias = true;
 
                                 // Add a constant pointer into the memory
                                 consts.push(Spanned::new(ConstDeclX {
-                                    name: format!("param_{}", param.name).into(),
+                                    name: Self::param_name(param).into(),
                                     typ: BaseType::BitVec(word_width),
                                 }));
                             }
                         },
-                        _ => unimplemented!("nested pointer")
+                        ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
                     }
             }
         }
 
+        // All pointers that could be aliasing are put into
+        // a "mem: [[bv32]]" mutable
         if has_alias {
             muts.push(Spanned::new(MutDeclX {
                 name: "mem".into(),
@@ -314,17 +430,199 @@ impl Graph {
             }));
         }
 
-        // Infer base types of channels
-        // by propagating type information
+        // Infer types of constant channels
+        let mut chan_types = IndexMap::new();
+        for chan in &self.chans {
+            match chan.borrow() {
+                ChannelX::Const { id, .. } => {
+                    // bv<word width>
+                    chan_types.insert(*id, TermTypeX::bit_vec(word_width));
+                }
+                ChannelX::Param { id, param, .. } => {
+                    match param.typ.as_ref() {
+                        ParamTypeX::Int(width) => {
+                            // bv<width>
+                            chan_types.insert(*id, TermTypeX::bit_vec(*width));
+                        }
+                        ParamTypeX::Pointer(base) =>
+                            match base.borrow() {
+                                ParamTypeX::Int(..) =>
+                                    if param.alias {
+                                        // &mem[*..]
+                                        chan_types.insert(*id, TermTypeX::mut_ref([
+                                            MutReferenceTypeX::offset(
+                                                MutReferenceTypeX::base("mem"),
+                                                MutReferenceIndex::Unknown,
+                                            )
+                                        ]));
+                                    } else {
+                                        // &param_<name>
+                                        chan_types.insert(*id, TermTypeX::mut_ref([
+                                            MutReferenceTypeX::base(Self::param_name(param)),
+                                        ]));
+                                    }
+                                ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
+                            }
+                    };
+                }
+
+                // Otherwise we need to infer from the operator using the channel
+                _ => {}
+            };
+        }
+
+        // Do a "dataflow analysis" to propagate type information until convergence
+        loop {
+            let mut changed = false;
+            for op in &self.ops {
+                match op.kind {
+                    OperatorKind::Add | OperatorKind::Ult |
+                    OperatorKind::Ld | OperatorKind::LdSync |
+                    OperatorKind::St | OperatorKind::StSync =>
+                        // Always output bv<word_width>
+                        for output in op.outputs(0) {
+                            if !chan_types.contains_key(&output.id()) {
+                                chan_types.insert(output.id(), TermTypeX::bit_vec(word_width));
+                                // println!("channel {}: {}", output.id(), TermTypeX::bit_vec(word_width));
+                                changed = true;
+                            }
+                        }
+
+                    OperatorKind::Carry(..) =>
+                        // Output of Carry is the join of input types
+                        // TODO: consider self loops
+                        if let (Some(input1), Some(input2)) = (op.inputs.get(1), op.inputs.get(2)) {
+                            if chan_types.contains_key(&input1.id()) && chan_types.contains_key(&input2.id()) {
+                                let typ = Self::join_term_types(&chan_types[&input1.id()], &chan_types[&input2.id()])?;
+                                for output in op.outputs(0) {
+                                    if !chan_types.contains_key(&output.id()) {
+                                        chan_types.insert(output.id(), typ.clone());
+                                        // println!("channel {}: {}", output.id(), typ);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
+
+                    OperatorKind::Steer(..) => {
+                        // Steer is polymorphic on the type of the first input
+                        if let Some(input) = op.inputs.get(1) {
+                            if chan_types.contains_key(&input.id()) {
+                                // Propagate type to outputs
+                                for output in op.outputs(0) {
+                                    if !chan_types.contains_key(&output.id()) {
+                                        chan_types.insert(output.id(), chan_types[&input.id()].clone());
+                                        // println!("channel {}: {}", output.id(), chan_types[&input.id()].clone());
+                                        changed = true;
+                                    }
+                                }
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
 
         // Generate channels
+        for chan in &self.chans {
+            if !chan_types.contains_key(&chan.id()) {
+                return Err(format!("unable to infer the type of channel {}", chan.id()));
+            }
+
+            let chan_type = &chan_types[&chan.id()];
+
+            let perm_var: PermVar = format!("p{}", perms.len()).into();
+            perms.push(Spanned::new(PermDeclX {
+                name: perm_var.clone(),
+                param_typs: match chan_type.borrow() {
+                    TermTypeX::Base(b@BaseType::BitVec(..)) => vec![b.clone()],
+                    _ => vec![],
+                },
+            }));
+
+            // chan c<id>: <type> | p(c<id>) (if type is bv)
+            // chan c<id>: <type> | p() (otherwise)
+            chans.push(Spanned::new(ChanDeclX {
+                name: Self::channel_name(chan),
+                typ: chan_type.clone(),
+                perm: PermissionX::var(perm_var, match chan_type.borrow() {
+                    TermTypeX::Base(BaseType::BitVec(..)) => vec![TermX::var(&Self::channel_name(chan))],
+                    _ => vec![],
+                }),
+            }))
+        }
 
         // Generate concrete processes
+        for op in &self.ops {
+            let name = Self::proc_name(op);
 
-        Program {
+            let perm_var: PermVar = format!("p{}", perms.len()).into();
+            perms.push(Spanned::new(PermDeclX {
+                name: perm_var.clone(),
+                param_typs: vec![],
+            }));
+
+            let mut res = vec![ProcResourceX::perm(PermissionX::var(perm_var, [] as [Term; 0]))];
+            res.extend(Self::gen_io_resources(op));
+
+            match op.kind {
+                OperatorKind::Add =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name, params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "a",
+                            Self::recv_from_input(word_width, op, 1, "b",
+                            Self::send_to_outputs(word_width, op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")), ProcX::skip()))),
+                    })),
+
+                OperatorKind::Ult =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name, params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(word_width, op, 0, "a",
+                            Self::recv_from_input(word_width, op, 1, "b",
+                            ProcX::ite(
+                                TermX::bvult(TermX::var("a"), TermX::var("b")),
+                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(1, word_width), ProcX::skip()),
+                                Self::send_to_outputs(word_width, op, 0, TermX::bit_vec(0, word_width), ProcX::skip()),
+                            ))),
+                    })),
+
+                _ => {}
+                // OperatorKind::Carry(_) => todo!(),
+                // OperatorKind::Steer(_) => todo!(),
+                // OperatorKind::Ld => todo!(),
+                // OperatorKind::LdSync => todo!(),
+                // OperatorKind::St => todo!(),
+                // OperatorKind::StSync => todo!(),
+            }
+        }
+
+        Ok(Program {
             decls: consts.into_iter().map(|d| Decl::Const(d))
-                .chain(muts.into_iter().map(|d: Rc<Spanned<MutDeclX>>| Decl::Mut(d)))
+                .chain(muts.into_iter().map(|d| Decl::Mut(d)))
+                .chain(perms.into_iter().map(|d| Decl::Perm(d)))
+                .chain(chans.into_iter().map(|d| Decl::Chan(d)))
+                .chain(procs.into_iter().map(|d| Decl::Proc(d)))
                 .collect(),
+        })
+    }
+}
+
+impl fmt::Display for OperatorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OperatorKind::Add => write!(f, "Add"),
+            OperatorKind::Ult => write!(f, "Ult"),
+            OperatorKind::Carry(pred) => write!(f, "Carry{}", if *pred { "T" } else { "F" }),
+            OperatorKind::Steer(pred) => write!(f, "Steer{}", if *pred { "T" } else { "F" }),
+            OperatorKind::Ld => write!(f, "Ld"),
+            OperatorKind::LdSync => write!(f, "LdSync"),
+            OperatorKind::St => write!(f, "St"),
+            OperatorKind::StSync => write!(f, "StSync"),
         }
     }
 }
