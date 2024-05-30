@@ -369,6 +369,8 @@ pub struct PermInferOptions {
     /// if num_fractions = 2, write = read_1 + read_2
     /// if num_fractions = 0, all permissions are false
     pub num_fractions: usize,
+
+    pub perm_grammar: bool,
 }
 
 impl PermInferOptions {
@@ -377,6 +379,7 @@ impl PermInferOptions {
             array_slices: false,
             use_ite: false,
             num_fractions: 0,
+            perm_grammar: true,
         }
     }
 }
@@ -757,12 +760,17 @@ impl Interpretation {
                     .chain([("frac_idx".to_string(), smt::Sort::Int)])
                     .chain(arr_indices_names);
 
+                let grammar = if options.perm_grammar {
+                    Some(interp.generate_synthsis_grammar(options, ctx, decl))
+                } else {
+                    None
+                };
+
                 let fresh_rel = smt_ctx.fresh_synth_fun(
                     format!("pv_{}", decl.name),
                     inputs,
                     smt::Sort::Bool,
-                    // None,
-                    Some(&interp.generate_synthsis_grammar(options, ctx, decl)),
+                    (&grammar).as_ref(),
                 );
 
                 interp

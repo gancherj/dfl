@@ -48,6 +48,11 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     num_fractions: usize,
 
+    /// Turn off syntactic restriction when
+    /// synthesizing permissions
+    #[arg(long, default_value_t = false)]
+    no_perm_grammar: bool,
+
     /// Path to the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
     solver: String,
@@ -73,7 +78,7 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             let o2p_file = fs::File::open(path.as_str())?;
             let reader = BufReader::new(o2p_file);
             let graph = Graph::from_reader(reader)?;
-            // println!("parsed: {:?}", graph);
+            println!("parsed: {:?}", graph);
             // println!("{}", graph.to_program(32).unwrap());
             let program = graph.to_program(&TranslationOptions { word_width: 32 })?;
 
@@ -107,6 +112,7 @@ fn type_check(mut args: Args) -> Result<(), Error> {
                 array_slices: args.array_slices,
                 use_ite: args.use_ite,
                 num_fractions: args.num_fractions,
+                perm_grammar: !args.no_perm_grammar,
             },
         )
     } else {
