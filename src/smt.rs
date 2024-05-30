@@ -2,8 +2,10 @@ use im::HashSet;
 use std::borrow::Borrow;
 use std::ffi::OsStr;
 use std::fmt;
+use std::fs::File;
 use std::io;
 use std::io::BufRead;
+use std::io::BufWriter;
 use std::io::{BufReader, Write};
 use std::process;
 use std::rc::Rc;
@@ -130,6 +132,7 @@ pub enum CommandX {
 
 pub struct Solver {
     process: process::Child,
+    options: SolverOptions,
     stdin: process::ChildStdin,
     stdout: BufReader<process::ChildStdout>,
 }
@@ -537,10 +540,14 @@ impl Drop for Solver {
     }
 }
 
+pub struct SolverOptions {
+    pub log: Option<BufWriter<File>>,
+}
+
 impl Solver {
     const WAIT_TIMEOUT: u64 = 5;
 
-    pub fn new<T: AsRef<OsStr>>(cmd: T, args: &[T]) -> io::Result<Solver> {
+    pub fn new<T: AsRef<OsStr>>(cmd: T, args: &[T], options: SolverOptions) -> io::Result<Solver> {
         let mut process = process::Command::new(cmd)
             .args(args)
             .stdin(process::Stdio::piped())
@@ -557,8 +564,9 @@ impl Solver {
             .ok_or(io::Error::other("failed to take solver process stdin"))?;
 
         Ok(Solver {
-            process: process,
-            stdin: stdin,
+            process,
+            options,
+            stdin,
             stdout: BufReader::new(stdout),
         })
     }
@@ -582,7 +590,10 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
-        // eprintln!("{}", cmd.borrow());
+        if let Some(log) = &mut self.options.log {
+            writeln!(log, "{}", cmd.borrow())?;
+            log.flush()?;
+        }
         writeln!(self.stdin, "{}", cmd.borrow())
     }
 

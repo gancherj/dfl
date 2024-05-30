@@ -84,7 +84,13 @@ impl Ctx {
 impl TermX {
     /// Encode the term as an SMT term
     /// All free variables and constants are introduced as SMT constants
-    pub fn as_smt_term(term: &Term, interp: &Interpretation) -> Result<smt::Term, SpannedError> {
+    pub fn as_smt_term(
+        term: &Term,
+        ctx: &Ctx,
+        local: &LocalCtx,
+        interp: &Interpretation,
+        defined_constraints: &mut Vec<smt::Term>,
+    ) -> Result<smt::Term, SpannedError> {
         match &term.x {
             TermX::Var(v) => interp
                 .vars
@@ -107,46 +113,60 @@ impl TermX {
             TermX::BitVec(i, w) => Ok(smt::TermX::bit_vec(*i, *w)),
             TermX::Ref(..) => unimplemented!("reference"),
             TermX::Add(t1, t2) => Ok(smt::TermX::add(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
-            TermX::BVAdd(t1, t2) => Ok(smt::TermX::bvadd(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
-            )),
+            TermX::BVAdd(t1, t2) => {
+                let t1_smt = TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?;
+                let t2_smt = TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?;
+
+                match TermX::type_check(term, ctx, local)?.as_ref() {
+                    TermTypeX::Base(BaseType::BitVec(w)) => {
+                        // No overflow when adding two terms
+                        // TODO: this condition might be too strict
+                        defined_constraints.extend([
+                            smt::TermX::bvsge(&t1_smt, smt::TermX::bit_vec(0, *w)),
+                            smt::TermX::bvsge(&t2_smt, smt::TermX::bit_vec(0, *w)),
+                        ]);
+                    }
+                    _ => {}
+                }
+
+                Ok(smt::TermX::bvadd(t1_smt, t2_smt))
+            }
             TermX::Mul(t1, t2) => Ok(smt::TermX::mul(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVMul(t1, t2) => Ok(smt::TermX::bvmul(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::Less(t1, t2) => Ok(smt::TermX::lt(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVULT(t1, t2) => Ok(smt::TermX::bvult(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVSLT(t1, t2) => Ok(smt::TermX::bvslt(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVSGT(t1, t2) => Ok(smt::TermX::bvsgt(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::And(t1, t2) => Ok(smt::TermX::and([
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             ])),
             TermX::Equal(t1, t2) => Ok(smt::TermX::eq(
-                TermX::as_smt_term(t1, interp)?,
-                TermX::as_smt_term(t2, interp)?,
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
-            TermX::Not(t) => Ok(smt::TermX::not(TermX::as_smt_term(t, interp)?)),
+            TermX::Not(t) => Ok(smt::TermX::not(TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)),
         }
     }
 }
@@ -167,22 +187,24 @@ impl PermissionX {
     pub fn as_smt_term(
         perm: &Permission,
         ctx: &Ctx,
+        local: &LocalCtx,
         interp: &Interpretation,
+        defined_constraints: &mut Vec<smt::Term>,
     ) -> Result<smt::Term, SpannedError> {
         match &perm.x {
             PermissionX::Empty => Ok(smt::TermX::bool(false)),
             PermissionX::Add(p1, p2) => Ok(smt::TermX::or([
-                PermissionX::as_smt_term(p1, ctx, interp)?,
-                PermissionX::as_smt_term(p2, ctx, interp)?,
+                PermissionX::as_smt_term(p1, ctx, local, interp, defined_constraints)?,
+                PermissionX::as_smt_term(p2, ctx, local, interp, defined_constraints)?,
             ])),
             PermissionX::Sub(p1, p2) => Ok(smt::TermX::and([
-                PermissionX::as_smt_term(p1, ctx, interp)?,
-                smt::TermX::not(PermissionX::as_smt_term(p2, ctx, interp)?),
+                PermissionX::as_smt_term(p1, ctx, local, interp, defined_constraints)?,
+                smt::TermX::not(PermissionX::as_smt_term(p2, ctx, local, interp, defined_constraints)?),
             ])),
             PermissionX::Ite(t, p1, p2) => Ok(smt::TermX::ite(
-                TermX::as_smt_term(t, interp)?,
-                PermissionX::as_smt_term(p1, ctx, interp)?,
-                PermissionX::as_smt_term(p2, ctx, interp)?,
+                TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?,
+                PermissionX::as_smt_term(p1, ctx, local, interp, defined_constraints)?,
+                PermissionX::as_smt_term(p2, ctx, local, interp, defined_constraints)?,
             )),
             PermissionX::Fraction(frac, mut_ref) => {
                 // Conditinos for the permission to be true at the given location
@@ -196,9 +218,11 @@ impl PermissionX {
                 }
 
                 PermissionX::generate_mut_ref_conditions(
-                    ctx,
-                    interp,
                     mut_ref,
+                    ctx,
+                    local,
+                    interp,
+                    defined_constraints,
                     &mut conditions,
                     &mut None,
                     &mut 0,
@@ -209,7 +233,7 @@ impl PermissionX {
             PermissionX::Var(v, terms) => {
                 let encodings = terms
                     .iter()
-                    .map(|t| TermX::as_smt_term(t, interp))
+                    .map(|t| TermX::as_smt_term(t, ctx, local, interp, defined_constraints))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let perm_interp = interp.perms.get(v).ok_or(SpannedError::spanned(
@@ -235,9 +259,11 @@ impl PermissionX {
     /// from a mutable reference
     /// e.g. A[a:b][c][d:e] => a <= idx0 < b /\ idx0 == a + c /\ d <= idx1 < e
     fn generate_mut_ref_conditions(
-        ctx: &Ctx,
-        interp: &Interpretation,
         mut_ref: &MutReference,
+        ctx: &Ctx,
+        local: &LocalCtx,
+        interp: &Interpretation,
+        defined_constraints: &mut Vec<smt::Term>,
         conditions: &mut Vec<smt::Term>,
         current_base: &mut Option<smt::Term>,
         current_idx: &mut usize,
@@ -261,9 +287,11 @@ impl PermissionX {
             MutReferenceX::Deref(..) => unimplemented!("deref in permission"),
             MutReferenceX::Index(mut_ref, t) => {
                 PermissionX::generate_mut_ref_conditions(
-                    ctx,
-                    interp,
                     mut_ref,
+                    ctx,
+                    local,
+                    interp,
+                    defined_constraints,
                     conditions,
                     current_base,
                     current_idx,
@@ -280,18 +308,18 @@ impl PermissionX {
                     conditions.push(smt::TermX::eq(
                         arr_idx,
                         if let Some(current_base) = current_base {
-                            smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, interp)?)
+                            smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)
                         } else {
-                            TermX::as_smt_term(t, interp)?
+                            TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?
                         },
                     ));
                 } else {
                     conditions.push(smt::TermX::eq(
                         arr_idx,
                         if let Some(current_base) = current_base {
-                            smt::TermX::bvadd(current_base.clone(), TermX::as_smt_term(t, interp)?)
+                            smt::TermX::bvadd(current_base.clone(), TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)
                         } else {
-                            TermX::as_smt_term(t, interp)?
+                            TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?
                         },
                     ));
                 }
@@ -302,9 +330,11 @@ impl PermissionX {
             }
             MutReferenceX::Slice(mut_ref, t1, t2) => {
                 PermissionX::generate_mut_ref_conditions(
-                    ctx,
-                    interp,
                     mut_ref,
+                    ctx,
+                    local,
+                    interp,
+                    defined_constraints,
                     conditions,
                     current_base,
                     current_idx,
@@ -319,7 +349,7 @@ impl PermissionX {
 
                 // t1 <= idx
                 if let Some(t1) = t1 {
-                    let t1_smt = TermX::as_smt_term(t1, interp)?;
+                    let t1_smt = TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?;
                     if base.is_int() {
                         conditions.push(smt::TermX::le(&t1_smt, arr_idx));
                         *current_base = if let Some(current_base) = current_base {
@@ -342,12 +372,12 @@ impl PermissionX {
                     if base.is_int() {
                         conditions.push(smt::TermX::lt(
                             arr_idx,
-                            TermX::as_smt_term(t2, interp)?,
+                            TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
                         ));
                     } else {
                         conditions.push(smt::TermX::bvult(
                             arr_idx,
-                            TermX::as_smt_term(t2, interp)?,
+                            TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
                         ));
                     }
                 }
@@ -462,19 +492,21 @@ impl Interpretation {
                             BaseType::Int => vec![
                                 // TermInt <= arr_idx_i_j
                                 smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-
+                                // TermInt = arr_idx_i_j
+                                smt::TermX::eq(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
                                 // TermInt <= arr_idx_i_j < TermInt
-                                smt::TermX::and([
-                                    smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                    smt::TermX::gt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                ]),
+                                // smt::TermX::and([
+                                //     smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                //     smt::TermX::gt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                // ]),
                             ],
                             BaseType::BitVec(..) => vec![
                                 smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                smt::TermX::and([
-                                    smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                    smt::TermX::bvugt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                ]),
+                                smt::TermX::eq(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                // smt::TermX::and([
+                                //     smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                //     smt::TermX::bvugt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                // ]),
                             ],
                             _ => unimplemented!()
                         }
@@ -501,7 +533,9 @@ impl Interpretation {
                     }
                 ).chain([
                     smt::TermX::bit_vec(0, *width),
-                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, *width)),
+                    smt::TermX::bit_vec(1, *width),
+                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::var(format!("TermBV{}", width))),
+                    // smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, *width)),
                 ]),
             ));
         }
@@ -532,7 +566,9 @@ impl Interpretation {
                     }
                 )
                 .chain([ smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")) ])
-                .chain(used_widths.iter().map(|width| smt::TermX::eq(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(0, *width)))),
+                .chain(used_widths.iter().map(|width| smt::TermX::eq(
+                    smt::TermX::var(format!("TermBV{}", width)),
+                    smt::TermX::var(format!("ConstantBV{}", width))))),
             ),
         ]);
 
@@ -983,15 +1019,26 @@ impl PermJudgment {
             } // ignore unsupported sort
         }
 
+        let mut defined_constraints = Vec::new();
+
+        let path_condition = smt::TermX::and(
+            self.local_constraints
+                .iter()
+                // NOTE: we only turn on overflow checking on permission constraints but not path conditions
+                // TODO: check if this makes sense
+                .map(|c| TermX::as_smt_term(c, ctx, &self.local, &interp, &mut vec![]))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+
+        let permission_constraint = self.perm_constraint.as_smt_term(smt_ctx, ctx, &self.local, &interp, &mut defined_constraints)?;
+
         let validity = smt::TermX::implies(
             smt::TermX::and([
                 // Add local constraints (path conditions)
-                smt::TermX::and(
-                    self.local_constraints
-                        .iter()
-                        .map(|c| TermX::as_smt_term(c, &interp))
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
+                path_condition,
+
+                // Add an assumption that all expressions are defined (i.e. no overflow)
+                smt::TermX::and(defined_constraints),
 
                 // TODO: this is a hacky assumption that there is no bit-vector overflowing
                 // we should generate more precise ones based on terms to avoid unsoundness
@@ -1005,7 +1052,7 @@ impl PermJudgment {
                         }),
                 ),
             ]),
-            self.perm_constraint.as_smt_term(smt_ctx, ctx, &interp)?,
+            permission_constraint,
         );
 
         Ok(validity)
@@ -1032,15 +1079,17 @@ impl PermConstraintX {
         &self,
         smt_ctx: &mut EncodingCtx,
         ctx: &Ctx,
+        local: &LocalCtx,
         interp: &Interpretation,
+        defined_constraints: &mut Vec<smt::Term>,
     ) -> Result<smt::Term, SpannedError> {
         match self {
             PermConstraintX::LessEq(p1, p2) => {
                 // Does there exists a mutable, a fraction index, and indices such that
                 // the permission is set at this location for p1 but not for p2
                 Ok(smt::TermX::implies(
-                    PermissionX::as_smt_term(p1, ctx, interp)?,
-                    PermissionX::as_smt_term(p2, ctx, interp)?,
+                    PermissionX::as_smt_term(p1, ctx, local, interp, defined_constraints)?,
+                    PermissionX::as_smt_term(p2, ctx, local, interp, defined_constraints)?,
                 ))
             }
             PermConstraintX::Disjoint(..) => unimplemented!("disjoint permission constraint"),
@@ -1076,18 +1125,19 @@ impl PermConstraintX {
                             )),
                             p.clone(),
                         ))
-                        .as_smt_term(smt_ctx, ctx, interp)?,
+                        .as_smt_term(smt_ctx, ctx, local, interp, defined_constraints)?,
                     ),
                 ))
             }
-            PermConstraintX::HasWrite(mut_ref, p) => Rc::new(PermConstraintX::LessEq(
-                Spanned::new(PermissionX::Fraction(
-                    PermFraction::Write(0),
-                    mut_ref.clone(),
-                )),
-                p.clone(),
-            ))
-            .as_smt_term(smt_ctx, ctx, interp),
+            PermConstraintX::HasWrite(mut_ref, p) =>
+                Rc::new(PermConstraintX::LessEq(
+                    Spanned::new(PermissionX::Fraction(
+                        PermFraction::Write(0),
+                        mut_ref.clone(),
+                    )),
+                    p.clone(),
+                ))
+                .as_smt_term(smt_ctx, ctx, local, interp, defined_constraints),
         }
     }
 }

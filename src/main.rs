@@ -1,3 +1,4 @@
+use std::io::BufWriter;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::{fs, io::BufReader};
@@ -18,6 +19,7 @@ use clap::{command, Parser};
 use error::SpannedError;
 use lalrpop_util::lalrpop_mod;
 use riptide::TranslationOptions;
+use smt::SolverOptions;
 use span::{FilePath, Source};
 
 lalrpop_mod!(pub syntax);
@@ -63,7 +65,11 @@ struct Args {
 
     /// Options for the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "--no-interactive --incremental")]
-    solver_opts: Vec<String>,
+    solver_flags: Vec<String>,
+
+    /// Log SMT commands into the given file
+    #[arg(long)]
+    log_smt: Option<String>,
 }
 
 fn type_check(mut args: Args) -> Result<(), Error> {
@@ -99,20 +105,27 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;
     }
 
+    let solver_options = SolverOptions {
+        log: match args.log_smt {
+            Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
+            None => None,
+        }
+    };
+
     ctx.type_check(&mut if args.check_perm {
-        let mut solver = smt::Solver::new(args.solver, &args.solver_opts)?;
+        let mut solver = smt::Solver::new(args.solver, &args.solver_flags, solver_options)?;
         solver.set_logic("ALL")?;
         PermCheckMode::Check(solver)
     } else if args.infer_perm {
         if args.solver == "cvc5" {
-            args.solver_opts.extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
+            args.solver_flags.extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
 
             if let Some(size) = args.max_grammar_size {
-                args.solver_opts.extend([ "--sygus-abort-size".to_string(), size.to_string() ]);
+                args.solver_flags.extend([ "--sygus-abort-size".to_string(), size.to_string() ]);
             }
         }
 
-        let mut solver = smt::Solver::new(args.solver, &args.solver_opts)?;
+        let mut solver = smt::Solver::new(args.solver, &args.solver_flags, solver_options)?;
         solver.set_logic("ALL")?;
         PermCheckMode::Infer(
             solver,

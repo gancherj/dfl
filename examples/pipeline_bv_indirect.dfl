@@ -1,0 +1,28 @@
+mut mem: array(bv32, bv32)
+
+const A: bv32
+
+chan ld_index: bv32 | write mem[A +bv ld_index]
+
+chan st_value: bv32
+chan st_index: bv32 | write mem[A +bv st_index]
+
+proc Inc(i: bv32) | write mem[A +bv i..], out ld_index =
+    send i -> ld_index
+    Inc(i +bv 1bv32)
+
+proc Ld() | in ld_index, out st_value, out st_index =
+    recv i <- ld_index
+    read x <- mem[A +bv i]
+    send x +bv 1bv32 -> st_value
+    send i -> st_index
+    Ld()
+
+proc St() | in st_value, in st_index =
+    recv x <- st_value
+    recv i <- st_index
+    write x -> mem[A +bv i]
+    St()
+
+proc Program() | all =
+    Inc(0bv32) || Ld() || St()
