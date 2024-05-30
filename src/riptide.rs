@@ -2,7 +2,7 @@ use std::{borrow::Borrow, rc::Rc};
 use std::{fmt, io};
 
 use im::HashMap;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde::{Serialize, Deserialize};
 
 use crate::ast::{Program, ConstDeclX, BaseType};
@@ -121,7 +121,9 @@ impl ChannelX {
 
 #[derive(Debug)]
 pub enum OperatorKind {
+    Id,
     Add,
+    Mul,
     ULT,
     SLT,
     SGT,
@@ -129,6 +131,7 @@ pub enum OperatorKind {
     Select,
     GEP,
     Carry(bool),
+    Merge,
     Inv(bool),
     Steer(bool),
     Ld,
@@ -166,7 +169,9 @@ impl ParamTypeX {
 impl OperatorKind {
     fn from_raw(raw: &RawVertex) -> Result<OperatorKind, String> {
         match raw.op.as_str() {
+            "ARITH_CFG_OP_ID" => Ok(OperatorKind::Id),
             "ARITH_CFG_OP_ADD" => Ok(OperatorKind::Add),
+            "MUL_CFG_OP_MUL" => Ok(OperatorKind::Mul),
             "ARITH_CFG_OP_ULT" => Ok(OperatorKind::ULT),
             "ARITH_CFG_OP_SLT" => Ok(OperatorKind::SLT),
             "ARITH_CFG_OP_SGT" => Ok(OperatorKind::SGT),
@@ -179,6 +184,7 @@ impl OperatorKind {
                 Some(pred) => Err(format!("unknown predicate `{}` for carry", pred)),
                 None => Err(format!("predicate not specified for carry"))
             }
+            "CF_CFG_OP_MERGE" => Ok(OperatorKind::Merge),
             "CF_CFG_OP_INVARIANT" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Inv(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Inv(false)),
@@ -331,8 +337,16 @@ impl Graph {
         if let (Some(t1), Some(t2)) = (t1, t2) {
             match (t1.as_ref(), t2.as_ref()) {
                 (TermTypeX::Base(b1), TermTypeX::Base(b2)) if b1 == b2 => Ok(Some(t1.clone())),
-                (TermTypeX::Ref(refs1), TermTypeX::Ref(refs2)) =>
-                    Ok(Some(TermTypeX::mut_ref(refs1.iter().chain(refs2)))),
+                (TermTypeX::Ref(refs1), TermTypeX::Ref(refs2)) => {
+                    let mut refs = IndexSet::new();
+                    for ref_type in refs1 {
+                        refs.insert(ref_type);
+                    }
+                    for ref_type in refs2 {
+                        refs.insert(ref_type);
+                    }
+                    Ok(Some(TermTypeX::mut_ref(refs.into_iter())))
+                }
                 _ => Err(format!("unable to join types {} and {}", t1, t2)),
             }
         } else if let Some(t1) = t1 {
@@ -465,25 +479,14 @@ impl Graph {
 
         for op in &self.ops {
             match op.kind {
-                OperatorKind::Add | OperatorKind::ULT | OperatorKind::SLT |
+                OperatorKind::Add | OperatorKind::Mul |
+                OperatorKind::ULT | OperatorKind::SLT |
                 OperatorKind::SGT | OperatorKind::Eq |
                 OperatorKind::Ld | OperatorKind::LdSync |
                 OperatorKind::St | OperatorKind::StSync =>
                     // Always output bv<word_width>
                     for output in op.outputs(0) {
                         update_chan_typ(chan_types, output, &TermTypeX::bit_vec(opts.word_width));
-                    }
-
-                OperatorKind::Select =>
-                    // Output of Select is the join of input types
-                    if let (Some(input1), Some(input2)) = (op.inputs.get(1), op.inputs.get(2)) {
-                        if let Some(typ) =
-                            Self::join_term_types(chan_types.get(&input1.id()), chan_types.get(&input2.id()))? {
-                            // println!("merged type: {} {}", op.id, typ);
-                            for output in op.outputs(0) {
-                                update_chan_typ(chan_types, output, &typ);
-                            }
-                        }
                     }
 
                 OperatorKind::GEP =>
@@ -509,8 +512,8 @@ impl Graph {
                         }
                     }
 
-                OperatorKind::Carry(..) =>
-                    // Output of Carry is the join of input types
+                OperatorKind::Select | OperatorKind::Carry(..) | OperatorKind::Merge =>
+                    // Output of Merge is the join of input types
                     if let (Some(input1), Some(input2)) = (op.inputs.get(1), op.inputs.get(2)) {
                         if let Some(typ) =
                             Self::join_term_types(chan_types.get(&input1.id()), chan_types.get(&input2.id()))? {
@@ -521,9 +524,9 @@ impl Graph {
                         }
                     }
 
-                OperatorKind::Inv(..) => {
+                OperatorKind::Id => {
                     // Inv is polymorphic on the type of the first input
-                    if let Some(input) = op.inputs.get(1) {
+                    if let Some(input) = op.inputs.get(0) {
                         if let Some(typ) = chan_types.get(&input.id()) {
                             let typ = typ.clone();
                             // Propagate type to outputs
@@ -534,7 +537,7 @@ impl Graph {
                     }
                 }
 
-                OperatorKind::Steer(..) => {
+                OperatorKind::Inv(..) | OperatorKind::Steer(..) => {
                     // Steer is polymorphic on the type of the first input
                     if let Some(input) = op.inputs.get(1) {
                         if let Some(typ) = chan_types.get(&input.id()) {
@@ -679,12 +682,29 @@ impl Graph {
             entry_proc = ProcX::par(recurse.clone(), entry_proc);
 
             match op.kind {
+                OperatorKind::Id =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(opts, op, 0, "a",
+                            Self::send_to_outputs(op, 0, TermX::var("a"),
+                            recurse)),
+                    })),
+
                 OperatorKind::Add =>
                     procs.push(Spanned::new(ProcDeclX {
                         name: name.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(opts, op, 0, "a",
                             Self::recv_from_input(opts, op, 1, "b",
                             Self::send_to_outputs(op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")),
+                            recurse))),
+                    })),
+
+                OperatorKind::Mul =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(opts, op, 0, "a",
+                            Self::recv_from_input(opts, op, 1, "b",
+                            Self::send_to_outputs(op, 0, TermX::bvmul(TermX::var("a"), TermX::var("b")),
                             recurse))),
                     })),
 
@@ -889,7 +909,21 @@ impl Graph {
                             )),
                     }));
                 }
-                    
+
+                OperatorKind::Merge =>
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: name.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(opts, op, 0, "d",
+                            Self::recv_from_input(opts, op, 1, "a",
+                            Self::recv_from_input(opts, op, 2, "b",
+                            ProcX::ite(
+                                TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))),
+                                Self::send_to_outputs(op, 0, TermX::var("a"),
+                                    recurse.clone()),
+                                Self::send_to_outputs(op, 0, TermX::var("b"),
+                                    recurse.clone()),
+                            )))),
+                    })),
             }
         }
 
@@ -916,7 +950,9 @@ impl Graph {
 impl fmt::Display for OperatorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            OperatorKind::Id => write!(f, "Id"),
             OperatorKind::Add => write!(f, "Add"),
+            OperatorKind::Mul => write!(f, "Mul"),
             OperatorKind::ULT => write!(f, "ULT"),
             OperatorKind::SLT => write!(f, "SLT"),
             OperatorKind::SGT => write!(f, "SGT"),
@@ -924,6 +960,7 @@ impl fmt::Display for OperatorKind {
             OperatorKind::Select => write!(f, "Select"),
             OperatorKind::GEP => write!(f, "GEP"),
             OperatorKind::Carry(pred) => write!(f, "Carry{}", if *pred { "T" } else { "F" }),
+            OperatorKind::Merge => write!(f, "Merge"),
             OperatorKind::Inv(pred) => write!(f, "Inv{}", if *pred { "T" } else { "F" }),
             OperatorKind::Steer(pred) => write!(f, "Steer{}", if *pred { "T" } else { "F" }),
             OperatorKind::Ld => write!(f, "Ld"),

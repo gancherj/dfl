@@ -487,21 +487,21 @@ impl Interpretation {
         }
 
         // Generate grammar for bit-vector terms
-        for width in used_widths {
-            symbols.push(smt::NonTerminal::new(format!("ConstantBV{}", width), smt::Sort::BitVec(width), [
-                smt::TermX::bit_vec(0, width),
-                smt::TermX::bvadd(smt::TermX::var(format!("ConstantBV{}", width)), smt::TermX::bit_vec(1, width)),
+        for width in &used_widths {
+            symbols.push(smt::NonTerminal::new(format!("ConstantBV{}", width), smt::Sort::BitVec(*width), [
+                smt::TermX::bit_vec(0, *width),
+                smt::TermX::bvadd(smt::TermX::var(format!("ConstantBV{}", width)), smt::TermX::bit_vec(1, *width)),
             ]));
-            symbols.push(smt::NonTerminal::new(format!("TermBV{}", width), smt::Sort::BitVec(width),
+            symbols.push(smt::NonTerminal::new(format!("TermBV{}", width), smt::Sort::BitVec(*width),
                     // Only add dependent variables of type bv{width}
                     perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
                     match typ {
-                        BaseType::BitVec(w) if *w == width => Some(smt::TermX::var(format!("x{}", i))),
+                        BaseType::BitVec(w) if *w == *width => Some(smt::TermX::var(format!("x{}", i))),
                         _ => None,
                     }
                 ).chain([
-                    smt::TermX::bit_vec(0, width),
-                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, width)),
+                    smt::TermX::bit_vec(0, *width),
+                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, *width)),
                 ]),
             ));
         }
@@ -530,9 +530,9 @@ impl Interpretation {
                         BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
                         _ => None,
                     }
-                ).chain([
-                    smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
-                ]),
+                )
+                .chain([ smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")) ])
+                .chain(used_widths.iter().map(|width| smt::TermX::eq(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(0, *width)))),
             ),
         ]);
 
@@ -984,13 +984,27 @@ impl PermJudgment {
         }
 
         let validity = smt::TermX::implies(
-            // Add local constraints (path conditions)
-            smt::TermX::and(
-                self.local_constraints
-                    .iter()
-                    .map(|c| TermX::as_smt_term(c, &interp))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+            smt::TermX::and([
+                // Add local constraints (path conditions)
+                smt::TermX::and(
+                    self.local_constraints
+                        .iter()
+                        .map(|c| TermX::as_smt_term(c, &interp))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+
+                // TODO: this is a hacky assumption that there is no bit-vector overflowing
+                // we should generate more precise ones based on terms to avoid unsoundness
+                smt::TermX::and(
+                    self.local.vars
+                        .iter()
+                        .filter_map(|(v, t)| if let TermTypeX::Base(BaseType::BitVec(w)) = t.as_ref() {
+                            Some(smt::TermX::bvsge(&interp.vars[v], smt::TermX::bit_vec(0, *w)))
+                        } else {
+                            None
+                        }),
+                ),
+            ]),
             self.perm_constraint.as_smt_term(smt_ctx, ctx, &interp)?,
         );
 

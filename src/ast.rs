@@ -536,6 +536,10 @@ impl TermX {
         Spanned::new(TermX::BVAdd(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn bvmul(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVMul(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn bvult(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::BVULT(t1.borrow().clone(), t2.borrow().clone()))
     }

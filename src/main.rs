@@ -53,6 +53,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_perm_grammar: bool,
 
+    /// Max grammar size when synthesizing permissions
+    #[arg(long)]
+    max_grammar_size: Option<u32>,
+
     /// Path to the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
     solver: String,
@@ -102,6 +106,10 @@ fn type_check(mut args: Args) -> Result<(), Error> {
     } else if args.infer_perm {
         if args.solver == "cvc5" {
             args.solver_opts.extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
+
+            if let Some(size) = args.max_grammar_size {
+                args.solver_opts.extend([ "--sygus-abort-size".to_string(), size.to_string() ]);
+            }
         }
 
         let mut solver = smt::Solver::new(args.solver, &args.solver_opts)?;
