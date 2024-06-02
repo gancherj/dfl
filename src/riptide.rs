@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::ast::{Program, ConstDeclX, BaseType};
 use crate::span::Spanned;
-use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam, ProcResource, ProcResourceX, ProcX, Term, TermType, TermTypeX, TermX, Var};
+use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam, ProcResource, ProcResourceX, ProcX, ProgramX, Term, TermType, TermTypeX, TermX, Var};
 
 pub type ChannelId = u32;
 pub type OperatorId = u32;
@@ -1033,14 +1033,14 @@ impl Graph {
             body: entry_proc,
         }));
 
-        Ok(Program {
+        Ok(Rc::new(ProgramX {
             decls: consts.into_iter().map(|d| Decl::Const(d))
                 .chain(muts.into_iter().map(|d| Decl::Mut(d)))
                 .chain(perms.into_iter().map(|d| Decl::Perm(d)))
                 .chain(chans.into_iter().map(|d| Decl::Chan(d)))
                 .chain(procs.into_iter().map(|d| Decl::Proc(d)))
                 .collect(),
-        })
+        }))
     }
 }
 

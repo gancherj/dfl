@@ -215,7 +215,8 @@ pub enum Decl {
     Proc(ProcDecl),
 }
 
-pub struct Program {
+pub type Program = Rc<ProgramX>;
+pub struct ProgramX {
     pub decls: Vec<Decl>,
 }
 
@@ -261,46 +262,153 @@ impl Ctx {
             .unwrap_or(0)
     }
 
+    pub fn add_const(&mut self, decl: &ConstDecl) -> Result<(), String> {
+        if self.consts.contains_key(&decl.name) {
+            Err(format!("duplicate constant declaration {}", decl.name))?;
+        }
+        self.consts.insert(decl.name.clone(), decl.clone());
+        Ok(())
+    }
+
+    pub fn add_mut(&mut self, decl: &MutDecl) -> Result<(), String> {
+        if self.muts.contains_key(&decl.name) {
+            Err(format!("duplicate mutable declaration {}", decl.name))?;
+        }
+        self.muts.insert(decl.name.clone(), decl.clone());
+        Ok(())
+    }
+
+    pub fn add_perm(&mut self, decl: &PermDecl) -> Result<(), String> {
+        if self.perms.contains_key(&decl.name) {
+            Err(format!("duplicate permission variable declaration {}", decl.name))?;
+        }
+        self.perms.insert(decl.name.clone(), decl.clone());
+        Ok(())
+    }
+
+    /// Since the parser will conflate variables and constants
+    /// here we construct a substitution map from variables to constants
+    pub fn const_substitution(&self) -> IndexMap<Var, Term> {
+        self.consts.keys().map(|c| (c.into(), TermX::var(c))).collect()
+    }
+
+    pub fn add_chan(&mut self, decl: &ChanDecl) -> Result<(), String> {
+        if self.chans.contains_key(&decl.name) {
+            Err(format!("duplicate channel declaration {}", decl.name))?;
+        }
+
+        // Substitute variables => constants
+        let perm_subst = PermissionX::substitute(&decl.perm, &self.const_substitution());
+        self.chans.insert(
+            decl.name.clone(),
+            Spanned::spanned_option(
+                &decl.span,
+                ChanDeclX {
+                    name: decl.name.clone(),
+                    typ: decl.typ.clone(),
+                    perm: perm_subst,
+                },
+            ),
+        );
+        Ok(())
+    }
+
+    /// Get all possible resources in the current context
+    pub fn get_all_res(&self, span: &Option<Span>) -> Vec<ProcResource> {
+        let mut res = Vec::new();
+
+        for mut_name in self.muts.keys() {
+            // Add write permission to mut_name
+            res.push(Spanned::spanned_option(
+                span,
+                ProcResourceX::Perm(Spanned::spanned_option(
+                    span,
+                    PermissionX::Fraction(
+                        PermFraction::Write(0),
+                        Spanned::spanned_option(
+                            span,
+                            MutReferenceX::Base(mut_name.clone()),
+                        ),
+                    ),
+                )),
+            ));
+        }
+
+        for chan_name in self.chans.keys() {
+            res.push(Spanned::spanned_option(
+                span,
+                ProcResourceX::Input(chan_name.clone()),
+            ));
+            res.push(Spanned::spanned_option(
+                span,
+                ProcResourceX::Output(chan_name.clone()),
+            ));
+        }
+
+        res
+    }
+
+    pub fn add_proc(&mut self, decl: &ProcDecl) -> Result<(), String> {
+        if self.procs.contains_key(&decl.name) {
+            Err(format!("duplicate process definition {:?}", decl.name))?;
+        }
+
+        let mut subst = self.const_substitution();
+
+        // Copy new resources with constants substituted
+        let new_res = if decl.all_res {
+            // Expand `proc ... | all` ==> `proc ... | write ..., in ...`
+            self.get_all_res(&decl.span)
+        } else {
+            // Substitute variables => constants
+            decl.res.iter().map(|r|
+                match &r.x {
+                    ProcResourceX::Perm(p) => Spanned::spanned_option(
+                        &r.span,
+                        ProcResourceX::Perm(PermissionX::substitute(p, &subst)),
+                    ),
+                    _ => r.clone(),
+                }).collect()
+        };
+
+        // Shadow process's paramters in the variables => constants substitution
+        for param in &decl.params {
+            subst.shift_remove(&param.name);
+        }
+
+        // Substitute the process body
+        let new_body = ProcX::substitute(&decl.body, &mut subst);
+
+        self.procs.insert(
+            decl.name.clone(),
+            Spanned::spanned_option(
+                &decl.span,
+                ProcDeclX {
+                    name: decl.name.clone(),
+                    params: decl.params.clone(),
+                    res: new_res,
+                    all_res: false,
+                    body: new_body,
+                },
+            ),
+        );
+
+        Ok(())
+    }
+
     /// Process a parsed AST into a context
     /// This do some preprocessing including
     /// replacing constants and some notations like
     /// "all" resources
     pub fn from(prog: &Program) -> Result<Ctx, String> {
         let mut ctx = Ctx::new();
-        let mut subst = IndexMap::new();
 
-        // Collect all constants and mutables first
+        // Collect all constants, mutables, and permission variables first
         for decl in &prog.decls {
             match decl {
-                Decl::Const(decl) => {
-                    if ctx.consts.contains_key(&decl.name) {
-                        return Err(format!("duplicate constant declaration {:?}", decl.name));
-                    }
-                    ctx.consts.insert(decl.name.clone(), decl.clone());
-                    subst.insert(Var::from(&decl.name), TermX::constant(&decl.name));
-                }
-                Decl::Mut(decl) => {
-                    if ctx.muts.contains_key(&decl.name) {
-                        return Err(format!("duplicate mutable declaration {:?}", decl.name));
-                    }
-                    ctx.muts.insert(decl.name.clone(), decl.clone());
-                }
-                _ => {}
-            }
-        }
-
-        // Collect all permissions
-        for decl in &prog.decls {
-            match decl {
-                Decl::Perm(decl) => {
-                    if ctx.perms.contains_key(&decl.name) {
-                        return Err(format!(
-                            "duplicate permission variable declaration {:?}",
-                            decl.name
-                        ));
-                    }
-                    ctx.perms.insert(decl.name.clone(), decl.clone());
-                }
+                Decl::Const(decl) => ctx.add_const(decl)?,
+                Decl::Mut(decl) => ctx.add_mut(decl)?,
+                Decl::Perm(decl) => ctx.add_perm(decl)?,
                 _ => {}
             }
         }
@@ -308,107 +416,18 @@ impl Ctx {
         // Collect channel declarations converting some Var to Const
         for decl in &prog.decls {
             match decl {
-                Decl::Chan(decl) => {
-                    if ctx.chans.contains_key(&decl.name) {
-                        return Err(format!("duplicate channel declaration {:?}", decl.name));
-                    }
-                    // Substitute constants
-                    ctx.chans.insert(
-                        decl.name.clone(),
-                        Spanned::spanned_option(
-                            &decl.span,
-                            ChanDeclX {
-                                name: decl.name.clone(),
-                                typ: decl.typ.clone(),
-                                perm: PermissionX::substitute(&decl.perm, &subst),
-                            },
-                        ),
-                    );
-                }
+                Decl::Chan(decl) => ctx.add_chan(decl)?,
                 _ => {}
             }
         }
 
         // Collect process declarations while converting some Var to Const
         // and also expanding "all" resource notation
+        // This needs to happen after add_chan's since the `all` resource
+        // notation requires knowing all channels in the context
         for decl in &prog.decls {
             match decl {
-                Decl::Proc(decl) => {
-                    if ctx.procs.contains_key(&decl.name) {
-                        return Err(format!("duplicate process definition {:?}", decl.name));
-                    }
-
-                    // Copy new resources with constants substituted
-                    let mut new_res = Vec::new();
-
-                    if decl.all_res {
-                        // The process should have all mutable and channel resources in the context
-                        for mut_name in ctx.muts.keys() {
-                            // Add write permission to mut_name
-                            new_res.push(Spanned::spanned_option(
-                                &decl.span,
-                                ProcResourceX::Perm(Spanned::spanned_option(
-                                    &decl.span,
-                                    PermissionX::Fraction(
-                                        PermFraction::Write(0),
-                                        Spanned::spanned_option(
-                                            &decl.span,
-                                            MutReferenceX::Base(mut_name.clone()),
-                                        ),
-                                    ),
-                                )),
-                            ));
-                        }
-
-                        for chan_name in ctx.chans.keys() {
-                            new_res.push(Spanned::spanned_option(
-                                &decl.span,
-                                ProcResourceX::Input(chan_name.clone()),
-                            ));
-                            new_res.push(Spanned::spanned_option(
-                                &decl.span,
-                                ProcResourceX::Output(chan_name.clone()),
-                            ));
-                        }
-                    } else {
-                        for res in &decl.res {
-                            let res_subst = match &res.x {
-                                ProcResourceX::Perm(p) => Spanned::spanned_option(
-                                    &res.span,
-                                    ProcResourceX::Perm(PermissionX::substitute(p, &subst)),
-                                ),
-                                _ => res.clone(),
-                            };
-                            new_res.push(res_subst);
-                        }
-                    }
-
-                    // Copy a new substitution with process parameters shadowed
-                    let mut new_subst = IndexMap::new();
-                    for (v, c) in &subst {
-                        new_subst.insert(v.clone(), c.clone());
-                    }
-                    for param in &decl.params {
-                        new_subst.shift_remove(&param.name);
-                    }
-
-                    // Substitute the process body
-                    let new_body = ProcX::substitute(&decl.body, &mut new_subst);
-
-                    ctx.procs.insert(
-                        decl.name.clone(),
-                        Spanned::spanned_option(
-                            &decl.span,
-                            ProcDeclX {
-                                name: decl.name.clone(),
-                                params: decl.params.iter().map(|p| p.clone()).collect(),
-                                res: new_res,
-                                all_res: false,
-                                body: new_body,
-                            },
-                        ),
-                    );
-                }
+                Decl::Proc(decl) => ctx.add_proc(decl)?,
                 _ => {}
             }
         }
@@ -511,6 +530,63 @@ impl TermTypeX {
     }
 }
 
+macro_rules! substitute_inplace {
+    // Unary constructs
+    ($term:expr, $op:expr, $k:ident, $t:expr, $subst:expr) => {
+        {
+            let t_subst = $k::substitute_inplace($t, $subst);
+            if t_subst.is_some() {
+                Some(Spanned::spanned_option(
+                    &$term.borrow().span,
+                    $op(t_subst.unwrap()),
+                ))
+            } else {
+                None
+            }
+        }
+    };
+
+    // Binary constructs
+    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $subst:expr) => {
+        {
+            let t1_subst = $k1::substitute_inplace($t1, $subst);
+            let t2_subst = $k2::substitute_inplace($t2, $subst);
+            if t1_subst.is_some() || t2_subst.is_some() {
+                Some(Spanned::spanned_option(
+                    &$term.borrow().span,
+                    $op(
+                        t1_subst.unwrap_or($t1.clone()),
+                        t2_subst.unwrap_or($t2.clone()),
+                    ),
+                ))
+            } else {
+                None
+            }
+        }
+    };
+
+    // Ternary constructs
+    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $k3:ident, $t3:expr, $subst:expr) => {
+        {
+            let t1_subst = $k1::substitute_inplace($t1, $subst);
+            let t2_subst = $k2::substitute_inplace($t2, $subst);
+            let t3_subst = $k3::substitute_inplace($t3, $subst);
+            if t1_subst.is_some() || t2_subst.is_some() || t3_subst.is_some() {
+                Some(Spanned::spanned_option(
+                    &$term.borrow().span,
+                    $op(
+                        t1_subst.unwrap_or($t1.clone()),
+                        t2_subst.unwrap_or($t2.clone()),
+                        t3_subst.unwrap_or($t3.clone()),
+                    ),
+                ))
+            } else {
+                None
+            }
+        }
+    };
+}
+
 impl TermX {
     pub fn var(v: impl Into<Var>) -> Term {
         Spanned::new(TermX::Var(v.into()))
@@ -572,179 +648,18 @@ impl TermX {
             TermX::Bool(..) => None,
             TermX::Int(..) => None,
             TermX::BitVec(..) => None,
-            TermX::Ref(m) => {
-                let m_subst = MutReferenceX::substitute_inplace(m, subst);
-                if m_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::Ref(m_subst.unwrap()),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::Add(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::Add(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::BVAdd(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::BVAdd(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::Mul(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::Mul(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::BVMul(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::BVMul(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::And(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::And(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::Less(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::Less(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::BVULT(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::BVULT(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::BVSLT(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::BVSLT(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::BVSGT(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::BVSGT(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::Equal(t1, t2) => {
-                let t1_subst = Self::substitute_inplace(t1, subst);
-                let t2_subst = Self::substitute_inplace(t2, subst);
-
-                if t1_subst.is_some() || t2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &term.borrow().span,
-                        TermX::Equal(
-                            t1_subst.unwrap_or(t1.clone()),
-                            t2_subst.unwrap_or(t2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            TermX::Not(t) => Self::substitute_inplace(t, subst)
-                .map(|t| Spanned::spanned_option(&term.borrow().span, TermX::Not(t))),
+            TermX::Ref(m) => substitute_inplace!(term, TermX::Ref, MutReferenceX, m, subst),
+            TermX::Add(t1, t2) => substitute_inplace!(term, TermX::Add, TermX, t1, TermX, t2, subst),
+            TermX::BVAdd(t1, t2) => substitute_inplace!(term, TermX::BVAdd, TermX, t1, TermX, t2, subst),
+            TermX::Mul(t1, t2) => substitute_inplace!(term, TermX::Mul, TermX, t1, TermX, t2, subst),
+            TermX::BVMul(t1, t2) => substitute_inplace!(term, TermX::BVMul, TermX, t1, TermX, t2, subst),
+            TermX::And(t1, t2) => substitute_inplace!(term, TermX::And, TermX, t1, TermX, t2, subst),
+            TermX::Less(t1, t2) => substitute_inplace!(term, TermX::Less, TermX, t1, TermX, t2, subst),
+            TermX::BVULT(t1, t2) => substitute_inplace!(term, TermX::BVULT, TermX, t1, TermX, t2, subst),
+            TermX::BVSLT(t1, t2) => substitute_inplace!(term, TermX::BVSLT, TermX, t1, TermX, t2, subst),
+            TermX::BVSGT(t1, t2) => substitute_inplace!(term, TermX::BVSGT, TermX, t1, TermX, t2, subst),
+            TermX::Equal(t1, t2) => substitute_inplace!(term, TermX::Equal, TermX, t1, TermX, t2, subst),
+            TermX::Not(t) => substitute_inplace!(term, TermX::Not, TermX, t, subst),
         }
     }
 
@@ -895,16 +810,6 @@ impl MutReferenceX {
         }
     }
 
-    /// Check if the mutable reference has unknown indices or not
-    // pub fn has_unknown(&self) -> bool {
-    //     match self {
-    //         MutReferenceX::Base(..) => false,
-    //         MutReferenceX::Deref(..) => false,
-    //         MutReferenceX::Index(m, ..) => m.has_deref(),
-    //         MutReferenceX::Slice(m, ..) => m.has_deref(),
-    //     }
-    // }
-
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             MutReferenceX::Base(..) => {}
@@ -934,32 +839,8 @@ impl MutReferenceX {
     ) -> Option<MutReference> {
         match &mut_ref.borrow().x {
             MutReferenceX::Base(..) => None,
-            MutReferenceX::Deref(t) => {
-                let t_subst = TermX::substitute_inplace(t, subst);
-                if t_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &mut_ref.borrow().span,
-                        MutReferenceX::Deref(t_subst.unwrap()),
-                    ))
-                } else {
-                    None
-                }
-            }
-            MutReferenceX::Index(m, t) => {
-                let m_subst = Self::substitute_inplace(m, subst);
-                let t_subst = TermX::substitute_inplace(t, subst);
-                if m_subst.is_some() || t_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &mut_ref.borrow().span,
-                        MutReferenceX::Index(
-                            m_subst.unwrap_or(m.clone()),
-                            t_subst.unwrap_or(t.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
+            MutReferenceX::Deref(t) => substitute_inplace!(mut_ref, MutReferenceX::Deref, TermX, t, subst),
+            MutReferenceX::Index(m, t) => substitute_inplace!(mut_ref, MutReferenceX::Index, MutReferenceX, m, TermX, t, subst),
             MutReferenceX::Slice(m, t1, t2) => {
                 let m_subst = Self::substitute_inplace(m, subst);
                 let t1_subst = t1
@@ -993,21 +874,63 @@ impl MutReferenceX {
             }
         }
     }
-
-    // // Substitute the highest level deref with a fixed reference to a mutable
-    // pub fn substitute_deref_with_mut_name(mut_ref: impl Borrow<MutReference>, name: &MutName) -> MutReference {
-    //     match &mut_ref.borrow().x {
-    //         MutReferenceX::Base(..) => mut_ref.borrow().clone(),
-    //         MutReferenceX::Deref(..) => Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Base(name.clone())),
-    //         MutReferenceX::Index(m, t) =>
-    //             Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Index(MutReferenceX::substitute_deref_with_mut_name(m, name), t.clone())),
-    //         MutReferenceX::Slice(m, t1, t2) =>
-    //             Spanned::spanned_option(&mut_ref.borrow().span, MutReferenceX::Slice(MutReferenceX::substitute_deref_with_mut_name(m, name), t1.clone(), t2.clone())),
-    //     }
-    // }
 }
 
 impl ProcX {
+    pub fn skip() -> Proc {
+        Spanned::new(ProcX::Skip)
+    }
+
+    pub fn send(c: impl Into<ChanName>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Send(
+            c.into(),
+            t.borrow().clone(),
+            p.borrow().clone(),
+        ))
+    }
+
+    pub fn recv(c: impl Into<ChanName>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Recv(c.into(), v.into(), p.borrow().clone()))
+    }
+
+    pub fn write(m: impl Borrow<MutReference>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Write(
+            m.borrow().clone(),
+            t.borrow().clone(),
+            p.borrow().clone(),
+        ))
+    }
+
+    pub fn read(m: impl Borrow<MutReference>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Read(
+            m.borrow().clone(),
+            v.into(),
+            p.borrow().clone(),
+        ))
+    }
+
+    pub fn ite(t: impl Borrow<Term>, p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Ite(
+            t.borrow().clone(),
+            p1.borrow().clone(),
+            p2.borrow().clone(),
+        ))
+    }
+
+    pub fn par(p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
+        Spanned::new(ProcX::Par(p1.borrow().clone(), p2.borrow().clone()))
+    }
+
+    pub fn call(
+        name: impl Into<ProcName>,
+        args: impl IntoIterator<Item = impl Borrow<Term>>,
+    ) -> Proc {
+        Spanned::new(ProcX::Call(
+            name.into(),
+            args.into_iter().map(|t| t.borrow().clone()).collect(),
+        ))
+    }
+    
     /// Returns None if unchanged
     // TODO: this functinon currently assumes no capturing of variables
     fn substitute_inplace(
@@ -1182,56 +1105,9 @@ impl PermissionX {
     ) -> Option<Permission> {
         match &perm.borrow().x {
             PermissionX::Empty => None,
-            PermissionX::Add(p1, p2) => {
-                let p1_subst = Self::substitute_inplace(p1, subst);
-                let p2_subst = Self::substitute_inplace(p2, subst);
-
-                if p1_subst.is_some() || p2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &perm.borrow().span,
-                        PermissionX::Add(
-                            p1_subst.unwrap_or(p1.clone()),
-                            p2_subst.unwrap_or(p2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            PermissionX::Sub(p1, p2) => {
-                let p1_subst = Self::substitute_inplace(p1, subst);
-                let p2_subst = Self::substitute_inplace(p2, subst);
-
-                if p1_subst.is_some() || p2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &perm.borrow().span,
-                        PermissionX::Sub(
-                            p1_subst.unwrap_or(p1.clone()),
-                            p2_subst.unwrap_or(p2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
-            PermissionX::Ite(t, p1, p2) => {
-                let t_subst = TermX::substitute_inplace(t, subst);
-                let p1_subst = Self::substitute_inplace(p1, subst);
-                let p2_subst = Self::substitute_inplace(p2, subst);
-
-                if t_subst.is_some() || p1_subst.is_some() || p2_subst.is_some() {
-                    Some(Spanned::spanned_option(
-                        &perm.borrow().span,
-                        PermissionX::Ite(
-                            t_subst.unwrap_or(t.clone()),
-                            p1_subst.unwrap_or(p1.clone()),
-                            p2_subst.unwrap_or(p2.clone()),
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            }
+            PermissionX::Add(p1, p2) => substitute_inplace!(perm, PermissionX::Add, PermissionX, p1, PermissionX, p2, subst),
+            PermissionX::Sub(p1, p2) => substitute_inplace!(perm, PermissionX::Sub, PermissionX, p1, PermissionX, p2, subst),
+            PermissionX::Ite(t, p1, p2) => substitute_inplace!(perm, PermissionX::Ite, TermX, t, PermissionX, p1, PermissionX, p2, subst),
             PermissionX::Fraction(frac, mut_ref) => {
                 let mut_ref_subst = MutReferenceX::substitute_inplace(mut_ref, subst);
                 if mut_ref_subst.is_some() {
@@ -1316,62 +1192,6 @@ impl PermissionX {
         let mut vars = IndexSet::new();
         self.free_vars_inplace(&mut vars);
         return vars;
-    }
-}
-
-impl ProcX {
-    pub fn skip() -> Proc {
-        Spanned::new(ProcX::Skip)
-    }
-
-    pub fn send(c: impl Into<ChanName>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Send(
-            c.into(),
-            t.borrow().clone(),
-            p.borrow().clone(),
-        ))
-    }
-
-    pub fn recv(c: impl Into<ChanName>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Recv(c.into(), v.into(), p.borrow().clone()))
-    }
-
-    pub fn write(m: impl Borrow<MutReference>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Write(
-            m.borrow().clone(),
-            t.borrow().clone(),
-            p.borrow().clone(),
-        ))
-    }
-
-    pub fn read(m: impl Borrow<MutReference>, v: impl Into<Var>, p: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Read(
-            m.borrow().clone(),
-            v.into(),
-            p.borrow().clone(),
-        ))
-    }
-
-    pub fn ite(t: impl Borrow<Term>, p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Ite(
-            t.borrow().clone(),
-            p1.borrow().clone(),
-            p2.borrow().clone(),
-        ))
-    }
-
-    pub fn par(p1: impl Borrow<Proc>, p2: impl Borrow<Proc>) -> Proc {
-        Spanned::new(ProcX::Par(p1.borrow().clone(), p2.borrow().clone()))
-    }
-
-    pub fn call(
-        name: impl Into<ProcName>,
-        args: impl IntoIterator<Item = impl Borrow<Term>>,
-    ) -> Proc {
-        Spanned::new(ProcX::Call(
-            name.into(),
-            args.into_iter().map(|t| t.borrow().clone()).collect(),
-        ))
     }
 }
 
@@ -1785,7 +1605,7 @@ impl fmt::Display for Decl {
     }
 }
 
-impl fmt::Display for Program {
+impl fmt::Display for ProgramX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for decl in &self.decls {
             writeln!(f, "{}", decl)?;

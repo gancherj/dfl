@@ -199,4 +199,4 @@ Decl: Decl = {
         Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: true, body: b })),
 }
 
-pub Program: Program = { Decl* => Program { decls: <> } }
+pub Program: Program = { Decl* => Rc::new(ProgramX { decls: <> }) }
