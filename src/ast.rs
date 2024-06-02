@@ -556,6 +556,10 @@ impl TermX {
         Spanned::new(TermX::Equal(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn less(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::Less(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn not(t: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::Not(t.borrow().clone()))
     }

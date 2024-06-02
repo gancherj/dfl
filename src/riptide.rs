@@ -130,6 +130,7 @@ pub enum OperatorKind {
     Eq,
     Select,
     GEP,
+    Stream(bool),
     Carry(bool),
     Merge,
     Inv(bool),
@@ -178,6 +179,12 @@ impl OperatorKind {
             "ARITH_CFG_OP_EQ" => Ok(OperatorKind::Eq),
             "CF_CFG_OP_SELECT" => Ok(OperatorKind::Select),
             "ARITH_CFG_OP_GEP" => Ok(OperatorKind::GEP),
+            "STREAM_CFG_OP_STREAM" => match &raw.pred {
+                Some(pred) if pred == "STREAM_CFG_PRED_TRUE" => Ok(OperatorKind::Stream(true)),
+                Some(pred) if pred == "STREAM_CFG_PRED_FALSE" => Ok(OperatorKind::Stream(false)),
+                Some(pred) => Err(format!("unknown predicate `{}` for stream", pred)),
+                None => Err(format!("predicate not specified for stream"))
+            }
             "CF_CFG_OP_CARRY" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Carry(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Carry(false)),
@@ -213,6 +220,10 @@ impl OperatorKind {
 }
 
 impl OperatorX {
+    pub fn ports(&self) -> impl Iterator<Item=&PortIndex> {
+        self.outputs.keys()
+    }
+
     pub fn outputs(&self, port: PortIndex) -> impl Iterator<Item=&Channel> {
         self.outputs.get(&port).map_or([].iter(), |v| v.iter())
     }
@@ -483,10 +494,13 @@ impl Graph {
                 OperatorKind::ULT | OperatorKind::SLT |
                 OperatorKind::SGT | OperatorKind::Eq |
                 OperatorKind::Ld | OperatorKind::LdSync |
-                OperatorKind::St | OperatorKind::StSync =>
+                OperatorKind::St | OperatorKind::StSync |
+                OperatorKind::Stream(..) =>
                     // Always output bv<word_width>
-                    for output in op.outputs(0) {
-                        update_chan_typ(chan_types, output, &TermTypeX::bit_vec(opts.word_width));
+                    for port in op.ports() {
+                        for output in op.outputs(*port) {
+                            update_chan_typ(chan_types, output, &TermTypeX::bit_vec(opts.word_width));
+                        }
                     }
 
                 OperatorKind::GEP =>
@@ -858,11 +872,26 @@ impl Graph {
                     let inv_type = &chan_types[&op.inputs[1].id()];
 
                     procs.push(Spanned::new(ProcDeclX {
-                        name: state1.clone(), params: vec![], res: res.clone(), all_res: false,
+                        name: state1.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(opts, op, 1, "a",
                             Self::send_to_outputs(op, 0, TermX::var("a"),
                             ProcX::call(state2.clone(), [TermX::var("a")]))),
                     }));
+
+                    // Generate a new permission var for the second state
+                    let perm_var: PermVar = format!("p{}", perms.len()).into();
+                    perms.push(Spanned::new(PermDeclX {
+                        name: perm_var.clone(),
+                        param_typs: vec![BaseType::BitVec(opts.word_width)],
+                    }));
+
+                    let mut res = vec![
+                        // p(inv_value)
+                        ProcResourceX::perm(PermissionX::var(perm_var, [
+                            TermX::var("a"),
+                        ]))
+                    ];
+                    res.extend(Self::gen_io_resources(op));
 
                     procs.push(Spanned::new(ProcDeclX {
                         name: state2.clone(),
@@ -882,16 +911,84 @@ impl Graph {
                     }));
                 }
 
+                OperatorKind::Stream(pred) => {
+                    let state1: ProcName = name.clone();
+                    let state2: ProcName = format!("{}Loop", name).into();
+
+                    let inv_type = &chan_types[&op.inputs[1].id()];
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state1.clone(), params: vec![], res, all_res: false,
+                        body: Self::recv_from_input(opts, op, 1, "start",
+                            Self::recv_from_input(opts, op, 1, "bound",
+                            Self::recv_from_input(opts, op, 1, "step",
+                            ProcX::call(state2.clone(), [TermX::var("start"), TermX::var("bound"), TermX::var("step")])))),
+                    }));
+
+                    // Generate a new permission var for the second state
+                    let perm_var: PermVar = format!("p{}", perms.len()).into();
+                    perms.push(Spanned::new(PermDeclX {
+                        name: perm_var.clone(),
+                        param_typs: vec![
+                            BaseType::BitVec(opts.word_width),
+                            BaseType::BitVec(opts.word_width),
+                            BaseType::BitVec(opts.word_width),
+                        ],
+                    }));
+
+                    let mut res = vec![
+                        // p(start, bound, step)
+                        ProcResourceX::perm(PermissionX::var(perm_var, [
+                            TermX::var("start"),
+                            TermX::var("bound"),
+                            TermX::var("step"),
+                        ]))
+                    ];
+                    res.extend(Self::gen_io_resources(op));
+
+                    procs.push(Spanned::new(ProcDeclX {
+                        name: state2.clone(),
+                        params: vec![
+                            ProcParam { name: "start".into(), typ: inv_type.clone() },
+                            ProcParam { name: "bound".into(), typ: inv_type.clone() },
+                            ProcParam { name: "step".into(), typ: inv_type.clone() },
+                        ],
+                        res, all_res: false,
+                        body: ProcX::ite(
+                                TermX::bvslt(TermX::var("start"), TermX::var("bound")),
+                                Self::send_to_outputs(op, 0, TermX::var("start"),
+                                    Self::send_to_outputs(op, 1, TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width),
+                                    ProcX::call(state2.clone(), [
+                                        TermX::bvadd(TermX::var("start"), TermX::var("step")),
+                                        TermX::var("bound"),
+                                        TermX::var("step"),
+                                    ]))),
+                                Self::send_to_outputs(op, 1, TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width),
+                                    ProcX::call(state1.clone(), [] as [Term; 0])),
+                            ),
+                    }));
+                }
+
                 OperatorKind::Carry(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
                     procs.push(Spanned::new(ProcDeclX {
-                        name: state1.clone(), params: vec![], res: res.clone(), all_res: false,
+                        name: state1.clone(), params: vec![], res, all_res: false,
                         body: Self::recv_from_input(opts, op, 1, "a",
                             Self::send_to_outputs(op, 0, TermX::var("a"),
                             ProcX::call(state2.clone(), [] as [Term; 0]))),
                     }));
+
+                    // Generate a new permission var for the second state
+                    let perm_var: PermVar = format!("p{}", perms.len()).into();
+                    perms.push(Spanned::new(PermDeclX {
+                        name: perm_var.clone(),
+                        param_typs: vec![],
+                    }));
+
+                    let mut res = vec![ProcResourceX::perm(PermissionX::var(perm_var, [] as [Term; 0]))];
+                    res.extend(Self::gen_io_resources(op));
 
                     procs.push(Spanned::new(ProcDeclX {
                         name: state2.clone(), params: vec![], res, all_res: false,
@@ -959,6 +1056,7 @@ impl fmt::Display for OperatorKind {
             OperatorKind::Eq => write!(f, "Eq"),
             OperatorKind::Select => write!(f, "Select"),
             OperatorKind::GEP => write!(f, "GEP"),
+            OperatorKind::Stream(pred) => write!(f, "Stream{}", if *pred { "T" } else { "F" }),
             OperatorKind::Carry(pred) => write!(f, "Carry{}", if *pred { "T" } else { "F" }),
             OperatorKind::Merge => write!(f, "Merge"),
             OperatorKind::Inv(pred) => write!(f, "Inv{}", if *pred { "T" } else { "F" }),
