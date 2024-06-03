@@ -256,6 +256,87 @@ pub struct TranslationOptions {
     pub word_width: BitVecWidth,
 }
 
+// Self::recv_from_input(
+//     opts,
+//     op,
+//     0,
+//     "a",
+//     Self::recv_from_input(
+//         opts,
+//         op,
+//         1,
+//         "b",
+//         ProcX::ite(
+//             TermX::bvult(TermX::var("a"), TermX::var("b")),
+//             Self::send_to_outputs(
+//                 op,
+//                 0,
+//                 TermX::bit_vec(1, opts.word_width),
+//                 recurse.clone(),
+//             ),
+//             Self::send_to_outputs(
+//                 op,
+//                 0,
+//                 TermX::bit_vec(0, opts.word_width),
+//                 recurse.clone(),
+//             ),
+//         ),
+//     ),
+// ),
+
+/// Returns Proc
+macro_rules! riptide_proc {
+    (($opts:expr, $op:expr)) => {};
+
+    // Use an abitrary process as continuation
+    (($opts:expr, $op:expr) cont $cont:expr;) => {
+        $cont
+    };
+
+    // Process call
+    (($opts:expr, $op:expr) call $name:expr $(,$args:expr)*;) => {
+        ProcX::call(&$name, vec![$($args),*] as Vec<Term>)
+    };
+
+    // Receive from port
+    (($opts:expr, $op:expr) recv $name:ident <= port $port:expr; $($rest:tt)*) => {
+        Graph::recv_from_input($opts, $op, $port, stringify!($name), riptide_proc!(($opts, $op) $($rest)*))
+    };
+
+    // Send to port
+    (($opts:expr, $op:expr) send $term:expr => port $port:expr; $($rest:tt)*) => {
+        Graph::send_to_outputs($op, $port, $term, riptide_proc!(($opts, $op) $($rest)*))
+    };
+
+    // Read
+    (($opts:expr, $op:expr) read $name:ident <= $mut_ref:expr; $($rest:tt)*) => {
+        ProcX::read($mut_ref, stringify!($name), riptide_proc!(($opts, $op) $($rest)*))
+    };
+
+    // Write
+    (($opts:expr, $op:expr) write $term:expr => $mut_ref:expr; $($rest:tt)*) => {
+        ProcX::write($mut_ref, $term, riptide_proc!(($opts, $op) $($rest)*))
+    };
+
+    // If-then-else
+    (($opts:expr, $op:expr) if ($term:expr) { $($left:tt)* } else { $($right:tt)* }) => {
+        ProcX::ite($term, riptide_proc!(($opts, $op) $($left)*), riptide_proc!(($opts, $op) $($right)*))
+    };
+}
+
+/// Returns ProcDecl
+macro_rules! riptide {
+    (($opts:expr, $op:expr) proc $name:expr $(,$params:expr)*; $res:expr => $($rest:tt)*) => {
+        ProcDeclX::new(
+            &$name,
+            vec![$($params),*] as Vec<ProcParam>,
+            $res,
+            riptide_proc! { ($opts, $op) $($rest)* }
+        )
+    }
+
+}
+
 impl Graph {
     pub fn from_reader(reader: impl io::Read) -> io::Result<Graph> {
         Graph::from_raw(&serde_json::from_reader(reader)?).map_err(|msg| io::Error::other(msg))
@@ -792,449 +873,207 @@ impl Graph {
             entry_proc = ProcX::par(recurse.clone(), entry_proc);
 
             match op.kind {
-                OperatorKind::Id => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::send_to_outputs(op, 0, TermX::var("a"), recurse),
-                    ),
-                )),
+                OperatorKind::Id => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        send TermX::var("a") => port 0;
+                        call name;
+                }),
 
-                OperatorKind::Add => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                TermX::bvadd(TermX::var("a"), TermX::var("b")),
-                                recurse,
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Add => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        send TermX::bvadd(TermX::var("a"), TermX::var("b")) => port 0;
+                        call name;
+                }),
 
-                OperatorKind::Mul => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                TermX::bvmul(TermX::var("a"), TermX::var("b")),
-                                recurse,
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Mul => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        send TermX::bvmul(TermX::var("a"), TermX::var("b")) => port 0;
+                        call name;
+                }),
 
-                OperatorKind::ULT => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            ProcX::ite(
-                                TermX::bvult(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::ULT => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        if (TermX::bvult(TermX::var("a"), TermX::var("b"))) {
+                            send TermX::bit_vec(1, opts.word_width) => port 0;
+                            call name;
+                        } else {
+                            send TermX::bit_vec(0, opts.word_width) => port 0;
+                            call name;
+                        }
+                }),
 
-                OperatorKind::SLT => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            ProcX::ite(
-                                TermX::bvslt(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::SLT => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        if (TermX::bvslt(TermX::var("a"), TermX::var("b"))) {
+                            send TermX::bit_vec(1, opts.word_width) => port 0;
+                            call name;
+                        } else {
+                            send TermX::bit_vec(0, opts.word_width) => port 0;
+                            call name;
+                        }
+                }),
 
-                OperatorKind::SGT => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            ProcX::ite(
-                                TermX::bvsgt(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::SGT => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        if (TermX::bvsgt(TermX::var("a"), TermX::var("b"))) {
+                            send TermX::bit_vec(1, opts.word_width) => port 0;
+                            call name;
+                        } else {
+                            send TermX::bit_vec(0, opts.word_width) => port 0;
+                            call name;
+                        }
+                }),
 
-                OperatorKind::Eq => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "a",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "b",
-                            ProcX::ite(
-                                TermX::eq(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone(),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Eq => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        if (TermX::eq(TermX::var("a"), TermX::var("b"))) {
+                            send TermX::bit_vec(1, opts.word_width) => port 0;
+                            call name;
+                        } else {
+                            send TermX::bit_vec(0, opts.word_width) => port 0;
+                            call name;
+                        }
+                }),
 
-                OperatorKind::Select => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "d",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "a",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                2,
-                                "b",
-                                ProcX::ite(
-                                    TermX::not(TermX::eq(
-                                        TermX::var("d"),
-                                        TermX::bit_vec(0, opts.word_width),
-                                    )),
-                                    Self::send_to_outputs(op, 0, TermX::var("a"), recurse.clone()),
-                                    Self::send_to_outputs(op, 0, TermX::var("b"), recurse.clone()),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Select => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv d <= port 0;
+                        recv a <= port 1;
+                        recv b <= port 2;
+                        if (TermX::not(TermX::eq(
+                            TermX::var("d"),
+                            TermX::bit_vec(0, opts.word_width),
+                        ))) {
+                            send TermX::var("a") => port 0;
+                            call name;
+                        } else {
+                            send TermX::var("b") => port 0;
+                            call name;
+                        }
+                }),
 
-                OperatorKind::GEP => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "r",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "i",
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                // &*r[i..]
-                                TermX::reference(MutReferenceX::slice(
-                                    MutReferenceX::deref(TermX::var("r")),
-                                    Some(&TermX::var("i")),
-                                    None,
-                                )),
-                                recurse.clone(),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::GEP => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv r <= port 0;
+                        recv i <= port 1;
+                        // *r[i..]
+                        send TermX::reference(MutReferenceX::slice(
+                            MutReferenceX::deref(TermX::var("r")),
+                            Some(&TermX::var("i")),
+                            None,
+                        )) => port 0;
+                        call name;
+                }),
 
-                OperatorKind::Ld => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "r",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "i",
-                            ProcX::read(
-                                MutReferenceX::index(
-                                    MutReferenceX::deref(TermX::var("r")),
-                                    TermX::var("i"),
-                                ),
-                                "v",
-                                Self::send_to_outputs(op, 0, TermX::var("v"), recurse),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Ld => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv r <= port 0;
+                        recv i <= port 1;
+                        read x <= MutReferenceX::index(
+                            MutReferenceX::deref(TermX::var("r")),
+                            TermX::var("i"),
+                        );
+                        send TermX::var("x") => port 0;
+                        call name;
+                }),
 
-                OperatorKind::LdSync => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "r",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "i",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                2,
-                                "s",
-                                ProcX::read(
-                                    MutReferenceX::index(
-                                        MutReferenceX::deref(TermX::var("r")),
-                                        TermX::var("i"),
-                                    ),
-                                    "v",
-                                    Self::send_to_outputs(op, 0, TermX::var("v"), recurse),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::LdSync => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv r <= port 0;
+                        recv i <= port 1;
+                        recv s <= port 2;
+                        read x <= MutReferenceX::index(
+                            MutReferenceX::deref(TermX::var("r")),
+                            TermX::var("i"),
+                        );
+                        send TermX::var("x") => port 0;
+                        call name;
+                }),
 
-                OperatorKind::St => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "r",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "i",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                2,
-                                "v",
-                                ProcX::write(
-                                    MutReferenceX::index(
-                                        MutReferenceX::deref(TermX::var("r")),
-                                        TermX::var("i"),
-                                    ),
-                                    TermX::var("v"),
-                                    Self::send_to_outputs(
-                                        op,
-                                        0,
-                                        TermX::bit_vec(0, opts.word_width),
-                                        recurse.clone(),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::St => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv r <= port 0;
+                        recv i <= port 1;
+                        recv x <= port 2;
+                        write TermX::var("x") => MutReferenceX::index(
+                            MutReferenceX::deref(TermX::var("r")),
+                            TermX::var("i"),
+                        );
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                }),
 
-                OperatorKind::StSync => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "r",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "i",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                2,
-                                "v",
-                                Self::recv_from_input(
-                                    opts,
-                                    op,
-                                    3,
-                                    "s",
-                                    ProcX::write(
-                                        MutReferenceX::index(
-                                            MutReferenceX::deref(TermX::var("r")),
-                                            TermX::var("i"),
-                                        ),
-                                        TermX::var("v"),
-                                        Self::send_to_outputs(
-                                            op,
-                                            0,
-                                            TermX::bit_vec(0, opts.word_width),
-                                            recurse,
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::StSync => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv r <= port 0;
+                        recv i <= port 1;
+                        recv x <= port 2;
+                        recv s <= port 3;
+                        write TermX::var("x") => MutReferenceX::index(
+                            MutReferenceX::deref(TermX::var("r")),
+                            TermX::var("i"),
+                        );
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                }),
 
-                OperatorKind::Steer(pred) => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "d",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "v",
-                            ProcX::ite(
-                                if pred {
-                                    TermX::not(TermX::eq(
-                                        TermX::var("d"),
-                                        TermX::bit_vec(0, opts.word_width),
-                                    ))
-                                } else {
-                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                                },
-                                Self::send_to_outputs(op, 0, TermX::var("v"), recurse.clone()),
-                                recurse.clone(),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Steer(pred) => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv d <= port 0;
+                        recv x <= port 1;
+                        if (if pred {
+                            TermX::not(TermX::eq(
+                                TermX::var("d"),
+                                TermX::bit_vec(0, opts.word_width),
+                            ))
+                        } else {
+                            TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                        }) {
+                            send TermX::var("x") => port 0;
+                            call name;
+                        } else {
+                            call name;
+                        }
+                }),
 
                 OperatorKind::Inv(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    procs.push(ProcDeclX::new(
-                        &state1,
-                        [] as [ProcParam; 0],
-                        res,
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "a",
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                TermX::var("a"),
-                                ProcX::call(state2.clone(), [TermX::var("a")]),
-                            ),
-                        ),
-                    ));
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state1; res =>
+                            recv a <= port 1;
+                            send TermX::var("a") => port 0;
+                            call state1;
+                    });
 
                     // Generate a new permission var for the second state
                     let inv_type = &chan_types[&op.inputs[1].id()];
@@ -1256,71 +1095,38 @@ impl Graph {
                     ];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(ProcDeclX::new(
-                        &state2,
-                        [ProcParamX::new("a", inv_type)],
-                        res,
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            0,
-                            "d",
-                            ProcX::ite(
-                                if pred {
-                                    TermX::not(TermX::eq(
-                                        TermX::var("d"),
-                                        TermX::bit_vec(0, opts.word_width),
-                                    ))
-                                } else {
-                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                                },
-                                Self::send_to_outputs(
-                                    op,
-                                    0,
-                                    TermX::var("a"),
-                                    ProcX::call(state2.clone(), [TermX::var("a")]),
-                                ),
-                                ProcX::call(state1.clone(), [] as [Term; 0]),
-                            ),
-                        ),
-                    ));
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state2, ProcParamX::new("a", inv_type); res =>
+                            recv d <= port 0;
+                            if (if pred {
+                                TermX::not(TermX::eq(
+                                    TermX::var("d"),
+                                    TermX::bit_vec(0, opts.word_width),
+                                ))
+                            } else {
+                                TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                            }) {
+                                send TermX::var("a") => port 0;
+                                call state2, TermX::var("a");
+                            } else {
+                                call state1;
+                            }
+                    });
                 }
 
                 OperatorKind::Stream(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    procs.push(ProcDeclX::new(
-                        &state1,
-                        [] as [ProcParam; 0],
-                        res,
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "start",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                1,
-                                "bound",
-                                Self::recv_from_input(
-                                    opts,
-                                    op,
-                                    1,
-                                    "step",
-                                    ProcX::call(
-                                        state2.clone(),
-                                        [
-                                            TermX::var("start"),
-                                            TermX::var("bound"),
-                                            TermX::var("step"),
-                                        ],
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ));
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state1; res =>
+                            recv start <= port 0;
+                            recv bound <= port 1;
+                            recv step <= port 2;
+                            call state2, TermX::var("start"), TermX::var("bound"), TermX::var("step");
+                    });
 
                     // Generate a new permission var for the second state
                     let perm_var: PermVar = format!("p{}", perms.len()).into();
@@ -1342,65 +1148,37 @@ impl Graph {
                     ];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(ProcDeclX::new(
-                        &state2,
-                        [
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state2,
                             ProcParamX::new("start", TermTypeX::bit_vec(opts.word_width)),
                             ProcParamX::new("bound", TermTypeX::bit_vec(opts.word_width)),
-                            ProcParamX::new("step", TermTypeX::bit_vec(opts.word_width)),
-                        ],
-                        res,
-                        ProcX::ite(
-                            TermX::bvslt(TermX::var("start"), TermX::var("bound")),
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                TermX::var("start"),
-                                Self::send_to_outputs(
-                                    op,
-                                    1,
-                                    TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width),
-                                    ProcX::call(
-                                        state2.clone(),
-                                        [
-                                            TermX::bvadd(TermX::var("start"), TermX::var("step")),
-                                            TermX::var("bound"),
-                                            TermX::var("step"),
-                                        ],
-                                    ),
-                                ),
-                            ),
-                            Self::send_to_outputs(
-                                op,
-                                1,
-                                TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width),
-                                ProcX::call(state1.clone(), [] as [Term; 0]),
-                            ),
-                        ),
-                    ));
+                            ProcParamX::new("step", TermTypeX::bit_vec(opts.word_width)); res =>
+                            if (TermX::bvslt(TermX::var("start"), TermX::var("bound"))) {
+                                send TermX::var("start") => port 0;
+                                send TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width) => port 1;
+                                call state2,
+                                    TermX::bvadd(TermX::var("start"), TermX::var("step")),
+                                    TermX::var("bound"),
+                                    TermX::var("step");
+                            } else {
+                                send TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width) => port 1;
+                                call state1;
+                            }
+                    });
                 }
 
                 OperatorKind::Carry(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    procs.push(ProcDeclX::new(
-                        &state1,
-                        [] as [ProcParam; 0],
-                        res,
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "a",
-                            Self::send_to_outputs(
-                                op,
-                                0,
-                                TermX::var("a"),
-                                ProcX::call(state2.clone(), [] as [Term; 0]),
-                            ),
-                        ),
-                    ));
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state1; res =>
+                            recv a <= port 1;
+                            send TermX::var("a") => port 0;
+                            call state2;
+                    });
 
                     // Generate a new permission var for the second state
                     let perm_var: PermVar = format!("p{}", perms.len()).into();
@@ -1412,73 +1190,44 @@ impl Graph {
                     ))];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(ProcDeclX::new(
-                        &state2,
-                        [] as [ProcParam; 0],
-                        res,
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            0,
-                            "d",
-                            ProcX::ite(
-                                if pred {
-                                    TermX::not(TermX::eq(
-                                        TermX::var("d"),
-                                        TermX::bit_vec(0, opts.word_width),
-                                    ))
-                                } else {
-                                    TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                                },
-                                Self::recv_from_input(
-                                    opts,
-                                    op,
-                                    2,
-                                    "b",
-                                    Self::send_to_outputs(
-                                        op,
-                                        0,
-                                        TermX::var("b"),
-                                        ProcX::call(state2.clone(), [] as [Term; 0]),
-                                    ),
-                                ),
-                                ProcX::call(state1.clone(), [] as [Term; 0]),
-                            ),
-                        ),
-                    ));
+                    procs.push(riptide! {
+                        (opts, op)
+                        proc state2; res =>
+                            recv d <= port 0;
+                            if (if pred {
+                                TermX::not(TermX::eq(
+                                    TermX::var("d"),
+                                    TermX::bit_vec(0, opts.word_width),
+                                ))
+                            } else {
+                                TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                            }) {
+                                recv b <= port 2;
+                                send TermX::var("b") => port 0;
+                                call state2;
+                            } else {
+                                call state1;
+                            }
+                    });
                 }
 
-                OperatorKind::Merge => procs.push(ProcDeclX::new(
-                    name,
-                    [] as [ProcParam; 0],
-                    res,
-                    Self::recv_from_input(
-                        opts,
-                        op,
-                        0,
-                        "d",
-                        Self::recv_from_input(
-                            opts,
-                            op,
-                            1,
-                            "a",
-                            Self::recv_from_input(
-                                opts,
-                                op,
-                                2,
-                                "b",
-                                ProcX::ite(
-                                    TermX::not(TermX::eq(
-                                        TermX::var("d"),
-                                        TermX::bit_vec(0, opts.word_width),
-                                    )),
-                                    Self::send_to_outputs(op, 0, TermX::var("a"), recurse.clone()),
-                                    Self::send_to_outputs(op, 0, TermX::var("b"), recurse.clone()),
-                                ),
-                            ),
-                        ),
-                    ),
-                )),
+                OperatorKind::Merge => procs.push(riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv d <= port 0;
+                        if (TermX::not(TermX::eq(
+                            TermX::var("d"),
+                            TermX::bit_vec(0, opts.word_width),
+                        ))) {
+                            recv a <= port 1;
+                            send TermX::var("a") => port 0;
+                            call name;
+                        } else {
+                            recv b <= port 2;
+                            send TermX::var("b") => port 0;
+                            call name;
+                        }
+                }),
             }
         }
 

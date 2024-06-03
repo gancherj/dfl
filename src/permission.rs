@@ -1,12 +1,4 @@
 use std::rc::Rc;
-/// AST for permission constraints
-
-/**
- * Semantically, for example,
- * if mut A: [[int]]
- * [write A] := write A[i][j] for all i, j
- * [write A[n..m]] := write A[i][j] for any n <= i < m, and any j
- */
 use std::{borrow::Borrow, fmt};
 
 use im::Vector;
@@ -53,6 +45,15 @@ pub struct Interpretation {
     constraints: Vec<smt::Term>,
 }
 
+impl Ctx {
+    /// Get the unique index of a mutable
+    /// based on the order it is defined
+    /// This is used for the SMT encoding of permissions
+    fn get_mut_index(&self, name: &MutName) -> Option<usize> {
+        return self.muts.get_index_of(name);
+    }
+}
+
 impl BaseType {
     pub fn as_smt_sort(&self) -> smt::Sort {
         match self {
@@ -60,15 +61,6 @@ impl BaseType {
             BaseType::Int => smt::Sort::Int,
             BaseType::BitVec(w) => smt::Sort::BitVec(*w),
         }
-    }
-}
-
-impl Ctx {
-    /// Get the unique index of a mutable
-    /// based on the order it is defined
-    /// This is used for the SMT encoding of permissions
-    fn get_mut_index(&self, name: &MutName) -> Option<usize> {
-        return self.muts.get_index_of(name);
     }
 }
 
@@ -663,119 +655,6 @@ impl Interpretation {
         ]);
 
         Rc::new(smt::SynthFunGrammarX { symbols })
-        // Rc::new(smt::SynthFunGrammarX {
-        //     symbols: [
-        //         smt::NonTerminal::new("Start", smt::Sort::Bool, [
-        //             smt::TermX::var("StartAtom"),
-        //             smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
-        //         ].into_iter().chain(
-        //             if options.use_ite {
-        //                 vec![smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))]
-        //             } else {
-        //                 vec![]
-        //             }
-        //         )),
-        //         smt::NonTerminal::new("StartAtom", smt::Sort::Bool, [
-        //             smt::TermX::and(
-        //                 [smt::TermX::var("Mutable")]
-        //                 .into_iter()
-        //                 .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
-        //                 .chain([smt::TermX::var("Fraction")])
-        //             ),
-
-        //             // smt::TermX::or(
-        //             //     ctx.muts.iter().enumerate().map(|(i, _)| smt::TermX::and(
-        //             //             [
-        //             //                 smt::TermX::var("Mutable"),
-        //             //                 // smt::TermX::var(format!("Mutable{}", i)),
-        //             //                 // smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-        //             //             ]
-        //             //             .into_iter()
-        //             //             .chain((0..num_arr_idx).map(|j| smt::TermX::var(format!("ArrayIndex{}", j))))
-        //             //             .chain([smt::TermX::var("Fraction")])
-        //             //         ),
-        //             //     )
-        //             // ),
-        //         ])
-        //     ].into_iter()
-        //     .chain([
-        //         // ctx.muts.iter().enumerate().map(|(i, _)|
-        //         //     // Three restrict an array index:
-        //         //     // indexing (A[i]), slicing (A[i:] or A[i:j])
-        //         //     smt::NonTerminal::new(format!("Mutable{}", i), smt::Sort::Bool, [
-        //         //         smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64)),
-        //         //     ])
-        //         // )
-        //         smt::NonTerminal::new("Mutable", smt::Sort::Bool, ctx.muts.iter().enumerate().map(|(i, _)|
-        //             smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))
-        //         ))
-        //     ])
-        //     .chain(
-        //         (0..num_arr_idx).map(|i|
-        //             // Two restrict an array index: slicing (A[i:] or A[i:j])
-        //             if options.array_slices {
-        //                 smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [
-        //                     // smt::TermX::app("arr_index", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-        //                     smt::TermX::app("arr_from", [smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-        //                     smt::TermX::app("arr_range", [smt::TermX::var("TermInt"), smt::TermX::var("TermInt"), smt::TermX::var(format!("arr_idx{}", i))]),
-        //                 ])
-        //             } else {
-        //                 // No restriction on array indices
-        //                 smt::NonTerminal::new(format!("ArrayIndex{}", i), smt::Sort::Bool, [ smt::TermX::bool(true) ])
-        //             }
-        //         )
-        //     )
-        //     .chain([
-        //         smt::NonTerminal::new("Fraction", smt::Sort::Bool,
-        //             // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
-        //             (0..options.num_fractions).map(|f|
-        //                 if f == options.num_fractions - 1 {
-        //                     smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
-        //                 } else {
-        //                     smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
-        //                 }
-        //             ).chain(
-        //                 if options.num_fractions == 1 {
-        //                     vec![smt::TermX::bool(false)]
-        //                 } else {
-        //                     vec![
-        //                         smt::TermX::bool(false),
-        //                         smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
-        //                     ]
-        //                 }
-        //             )
-        //         ),
-        //         smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
-        //             smt::TermX::int(0),
-        //             smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
-        //         ]),
-        //         smt::NonTerminal::new("TermInt", smt::Sort::Int,
-        //             // Only add dependent variables of type int
-        //             perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-        //                 match typ {
-        //                     BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
-        //                     _ => None,
-        //                 }
-        //             ).chain([
-        //                 smt::TermX::int(0),
-        //                 smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
-        //             ]),
-        //         ),
-        //         smt::NonTerminal::new("TermBool", smt::Sort::Bool,
-        //             // Only add dependent variables of type bool
-        //             perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-        //                 match typ {
-        //                     BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
-        //                     _ => None,
-        //                 }
-        //             ).chain([
-        //                 smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")),
-        //                 // no need for not since we can just reorder ite branches
-        //                 // smt::TermX::not(smt::TermX::var("TermBool")),
-        //             ]),
-        //         ),
-        //     ]).collect(),
-        // })
     }
 
     /// Initialize an interpretation using fresh variables to represent
@@ -1204,21 +1083,6 @@ impl PermConstraintX {
             }
             PermConstraintX::Disjoint(..) => unimplemented!("disjoint permission constraint"),
             PermConstraintX::HasRead(mut_ref, p) => {
-                // has_read(ref, p)
-                // iff read(0) <= p \/ ... \/ read(k - 1) <= p
-                // iff exists frac_idx. read(frac_idx) <= p
-
-                // let mut conditions = Vec::new();
-
-                // for k in 0..num_fractions {
-                //     conditions.push(Rc::new(PermConstraintX::LessEq(
-                //         Spanned::new(PermissionX::Fraction(PermFraction::Read(k as u32), mut_ref.clone())),
-                //         p.clone(),
-                //     )).as_smt_term(smt_ctx, ctx, interp, &mut_idx, &indices, &frac_idx, num_fractions)?);
-                // }
-
-                // Ok(smt::TermX::and(conditions))
-
                 let frac_idx_name = &smt_ctx.fresh_ident("frac_idx");
                 let frac_idx = &smt::TermX::var(frac_idx_name);
 
