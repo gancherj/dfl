@@ -1,19 +1,19 @@
 use std::io::BufWriter;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::{fs, io::BufReader};
 use std::process::ExitCode;
+use std::{fs, io::BufReader};
 
 pub mod ast;
 pub mod check;
+pub mod error;
 pub mod permission;
+pub mod riptide;
 pub mod smt;
 pub mod span;
-pub mod riptide;
-pub mod error;
 
-use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
 use crate::error::Error;
+use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
 
 use clap::{command, Parser};
 use error::SpannedError;
@@ -79,9 +79,10 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         // Parse from dfl source
         Some(b"dfl") => {
             let src: Source = fs::read_to_string(path.as_str())?.into();
-            syntax::ProgramParser::new().parse(&path, &src, src.as_str())
+            syntax::ProgramParser::new()
+                .parse(&path, &src, src.as_str())
                 .map_err(|e| SpannedError::from_parse_error(&path, &src, e))?
-        },
+        }
 
         // Translate from RipTide dataflow graph
         Some(b"o2p") => {
@@ -96,7 +97,7 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             program
         }
 
-        _ => Err(format!("unknown extension {}", path))?
+        _ => Err(format!("unknown extension {}", path))?,
     };
 
     let ctx = Ctx::from(&program)?;
@@ -109,7 +110,7 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         log: match args.log_smt {
             Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
             None => None,
-        }
+        },
     };
 
     ctx.type_check(&mut if args.check_perm {
@@ -118,10 +119,12 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         PermCheckMode::Check(solver)
     } else if args.infer_perm {
         if args.solver == "cvc5" {
-            args.solver_flags.extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
+            args.solver_flags
+                .extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
 
             if let Some(size) = args.max_grammar_size {
-                args.solver_flags.extend([ "--sygus-abort-size".to_string(), size.to_string() ]);
+                args.solver_flags
+                    .extend(["--sygus-abort-size".to_string(), size.to_string()]);
             }
         }
 

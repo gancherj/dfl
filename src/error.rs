@@ -1,6 +1,6 @@
-use std::io;
-use std::fmt;
 use lalrpop_util::ParseError;
+use std::fmt;
+use std::io;
 
 use crate::span::FilePath;
 use crate::span::Source;
@@ -70,42 +70,54 @@ impl SpannedError {
         Err(SpannedError::spanned(span, msg))
     }
 
-    pub fn from_parse_error<T: fmt::Display, E: fmt::Display>(path: &FilePath, src: &Source, err: ParseError<usize, T, E>) -> SpannedError {
+    pub fn from_parse_error<T: fmt::Display, E: fmt::Display>(
+        path: &FilePath,
+        src: &Source,
+        err: ParseError<usize, T, E>,
+    ) -> SpannedError {
         let (loc, msg) = match err {
-            ParseError::InvalidToken { location } => 
-                (location, "parse error: invalid token".into()),
-            ParseError::UnrecognizedEof { location, .. } =>
-                (location, "parse error: unexpected eof".into()),
+            ParseError::InvalidToken { location } => {
+                (location, "parse error: invalid token".into())
+            }
+            ParseError::UnrecognizedEof { location, .. } => {
+                (location, "parse error: unexpected eof".into())
+            }
             ParseError::UnrecognizedToken {
                 token: (start, token, _),
                 ..
-            } =>
-                (start, format!("parse error: unexpected token {}", token)),
+            } => (start, format!("parse error: unexpected token {}", token)),
             ParseError::ExtraToken {
                 token: (start, token, _),
-            } =>
-                (start, format!("parse error: extra token {}", token)),
-            ParseError::User { error } =>
-                (0, format!("parse error: {}", error)),
+            } => (start, format!("parse error: extra token {}", token)),
+            ParseError::User { error } => (0, format!("parse error: {}", error)),
         };
-        SpannedError::spanned(&Some(Span {
-            path: path.clone(),
-            source: src.clone(),
-            start: loc,
-            end: loc,
-        }), msg)
+        SpannedError::spanned(
+            &Some(Span {
+                path: path.clone(),
+                source: src.clone(),
+                start: loc,
+                end: loc,
+            }),
+            msg,
+        )
     }
 }
 
 impl fmt::Display for SpannedError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: {}", match &self.span {
-            Some(span) => if let Some((line, col)) = span.get_start_line_col_num() {
-                format!("{}:{}:{}", span.path, line, col)
-            } else {
-                "<unknown>".into()
+        write!(
+            f,
+            "{}: {}",
+            match &self.span {
+                Some(span) =>
+                    if let Some((line, col)) = span.get_start_line_col_num() {
+                        format!("{}:{}:{}", span.path, line, col)
+                    } else {
+                        "<unknown>".into()
+                    },
+                None => "<unknown>".into(),
             },
-            None => "<unknown>".into(),
-        }, self.msg)
+            self.msg
+        )
     }
 }

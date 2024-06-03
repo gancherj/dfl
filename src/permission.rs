@@ -15,9 +15,9 @@ use indexmap::{IndexMap, IndexSet};
 use crate::{
     ast::*,
     check::LocalCtx,
+    error::SpannedError,
     smt::{self, EncodingCtx, SynthFunGrammar},
     span::Spanned,
-    error::SpannedError,
 };
 
 pub type PermConstraint = Rc<PermConstraintX>;
@@ -29,8 +29,9 @@ pub enum PermConstraintX {
     HasWrite(MutReference, Permission),
 }
 
+pub type PermJudgment = Rc<PermJudgmentX>;
 #[derive(Debug)]
-pub struct PermJudgment {
+pub struct PermJudgmentX {
     pub local: LocalCtx,
     pub local_constraints: Vector<Term>,
     pub perm_constraint: PermConstraint,
@@ -50,16 +51,6 @@ pub struct Interpretation {
 
     /// Additional constraints for the free variables
     constraints: Vec<smt::Term>,
-}
-
-impl fmt::Display for PermJudgment {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.local)?;
-        for local_constraint in &self.local_constraints {
-            write!(f, ", {}", local_constraint)?;
-        }
-        write!(f, " |= {}", self.perm_constraint)
-    }
 }
 
 impl BaseType {
@@ -92,16 +83,14 @@ impl TermX {
         defined_constraints: &mut Vec<smt::Term>,
     ) -> Result<smt::Term, SpannedError> {
         match &term.x {
-            TermX::Var(v) => interp
-                .vars
-                .get(v)
-                .cloned()
-                .ok_or(SpannedError::spanned(&term.span, format!("undefined variable {v}"))),
-            TermX::Const(c) => interp
-                .consts
-                .get(c)
-                .cloned()
-                .ok_or(SpannedError::spanned(&term.span, format!("undefined constant {c}"))),
+            TermX::Var(v) => interp.vars.get(v).cloned().ok_or(SpannedError::spanned(
+                &term.span,
+                format!("undefined variable {v}"),
+            )),
+            TermX::Const(c) => interp.consts.get(c).cloned().ok_or(SpannedError::spanned(
+                &term.span,
+                format!("undefined constant {c}"),
+            )),
             TermX::Bool(b) => Ok(smt::TermX::bool(*b)),
             TermX::Int(i) => {
                 if *i >= 0 {
@@ -166,7 +155,13 @@ impl TermX {
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
-            TermX::Not(t) => Ok(smt::TermX::not(TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)),
+            TermX::Not(t) => Ok(smt::TermX::not(TermX::as_smt_term(
+                t,
+                ctx,
+                local,
+                interp,
+                defined_constraints,
+            )?)),
         }
     }
 }
@@ -199,7 +194,13 @@ impl PermissionX {
             ])),
             PermissionX::Sub(p1, p2) => Ok(smt::TermX::and([
                 PermissionX::as_smt_term(p1, ctx, local, interp, defined_constraints)?,
-                smt::TermX::not(PermissionX::as_smt_term(p2, ctx, local, interp, defined_constraints)?),
+                smt::TermX::not(PermissionX::as_smt_term(
+                    p2,
+                    ctx,
+                    local,
+                    interp,
+                    defined_constraints,
+                )?),
             ])),
             PermissionX::Ite(t, p1, p2) => Ok(smt::TermX::ite(
                 TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?,
@@ -308,7 +309,10 @@ impl PermissionX {
                     conditions.push(smt::TermX::eq(
                         arr_idx,
                         if let Some(current_base) = current_base {
-                            smt::TermX::add(current_base.clone(), TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)
+                            smt::TermX::add(
+                                current_base.clone(),
+                                TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?,
+                            )
                         } else {
                             TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?
                         },
@@ -317,7 +321,10 @@ impl PermissionX {
                     conditions.push(smt::TermX::eq(
                         arr_idx,
                         if let Some(current_base) = current_base {
-                            smt::TermX::bvadd(current_base.clone(), TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?)
+                            smt::TermX::bvadd(
+                                current_base.clone(),
+                                TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?,
+                            )
                         } else {
                             TermX::as_smt_term(t, ctx, local, interp, defined_constraints)?
                         },
@@ -426,16 +433,28 @@ impl Interpretation {
 
         // Start ::= StartAtom + ... + StartAtom | if TermBool { StartAtom } else { StartAtom }
         if options.use_ite {
-            symbols.push(smt::NonTerminal::new("Start", smt::Sort::Bool, [
-                smt::TermX::var("StartAtom"),
-                smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
-                smt::TermX::ite(smt::TermX::var("TermBool"), smt::TermX::var("StartAtom"), smt::TermX::var("StartAtom"))
-            ]));
+            symbols.push(smt::NonTerminal::new(
+                "Start",
+                smt::Sort::Bool,
+                [
+                    smt::TermX::var("StartAtom"),
+                    smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
+                    smt::TermX::ite(
+                        smt::TermX::var("TermBool"),
+                        smt::TermX::var("StartAtom"),
+                        smt::TermX::var("StartAtom"),
+                    ),
+                ],
+            ));
         } else {
-            symbols.push(smt::NonTerminal::new("Start", smt::Sort::Bool, [
-                smt::TermX::var("StartAtom"),
-                smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
-            ]));
+            symbols.push(smt::NonTerminal::new(
+                "Start",
+                smt::Sort::Bool,
+                [
+                    smt::TermX::var("StartAtom"),
+                    smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
+                ],
+            ));
         }
 
         // StartAtom ::= (and (mut_idx = 0) Fraction ArrayIndex_0_0 ArrayIndex_0_1 ...) |
@@ -443,33 +462,54 @@ impl Interpretation {
         let mut atomic_rules = Vec::new();
         for (i, decl) in ctx.muts.values().enumerate() {
             atomic_rules.push(smt::TermX::and(
-                [smt::TermX::eq(smt::TermX::var("mut_idx"), smt::TermX::int(i as u64))]
+                [smt::TermX::eq(
+                    smt::TermX::var("mut_idx"),
+                    smt::TermX::int(i as u64),
+                )]
                 .into_iter()
                 .chain([smt::TermX::var("Fraction")])
-                .chain((0..decl.typ.get_dimensions()).map(|j| smt::TermX::var(format!("ArrayIndex_{}_{}", i, j))))
+                .chain(
+                    (0..decl.typ.get_dimensions())
+                        .map(|j| smt::TermX::var(format!("ArrayIndex_{}_{}", i, j))),
+                ),
             ));
         }
-        symbols.push(smt::NonTerminal::new("StartAtom", smt::Sort::Bool, &atomic_rules));
+        symbols.push(smt::NonTerminal::new(
+            "StartAtom",
+            smt::Sort::Bool,
+            &atomic_rules,
+        ));
 
         // Fraction ::= read 0 | read 1 | ... | read n | write (n + 1) | write 0
-        symbols.push(smt::NonTerminal::new("Fraction", smt::Sort::Bool,
+        symbols.push(smt::NonTerminal::new(
+            "Fraction",
+            smt::Sort::Bool,
             // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
-            (0..options.num_fractions).map(|f|
-                if f == options.num_fractions - 1 {
-                    smt::TermX::app("frac_write", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
-                } else {
-                    smt::TermX::app("frac_read", [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")])
-                }
-            ).chain(
-                if options.num_fractions == 1 {
+            (0..options.num_fractions)
+                .map(|f| {
+                    if f == options.num_fractions - 1 {
+                        smt::TermX::app(
+                            "frac_write",
+                            [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")],
+                        )
+                    } else {
+                        smt::TermX::app(
+                            "frac_read",
+                            [smt::TermX::int(f as u64), smt::TermX::var("frac_idx")],
+                        )
+                    }
+                })
+                .chain(if options.num_fractions == 1 {
                     vec![smt::TermX::bool(false)]
                 } else {
                     vec![
                         smt::TermX::bool(false),
-                        smt::TermX::app("frac_write", [smt::TermX::int(0), smt::TermX::var("frac_idx")]),
+                        smt::TermX::app(
+                            "frac_write",
+                            [smt::TermX::int(0), smt::TermX::var("frac_idx")],
+                        ),
                     ]
-                }
-            )
+                }),
         ));
 
         // All used bit-widths in bit-vector indices
@@ -483,17 +523,25 @@ impl Interpretation {
                         used_widths.insert(*w);
                         smt::TermX::var(format!("TermBV{}", w))
                     }
-                    _ => unimplemented!()
+                    _ => unimplemented!(),
                 };
-                
-                symbols.push(smt::NonTerminal::new(format!("ArrayIndex_{}_{}", i, j), smt::Sort::Bool,
+
+                symbols.push(smt::NonTerminal::new(
+                    format!("ArrayIndex_{}_{}", i, j),
+                    smt::Sort::Bool,
                     if options.array_slices {
                         match base {
                             BaseType::Int => vec![
                                 // TermInt <= arr_idx_i_j
-                                smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                smt::TermX::le(
+                                    index_grammar.clone(),
+                                    smt::TermX::var(format!("arr_idx_{}_{}", i, j)),
+                                ),
                                 // TermInt = arr_idx_i_j
-                                smt::TermX::eq(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                smt::TermX::eq(
+                                    index_grammar.clone(),
+                                    smt::TermX::var(format!("arr_idx_{}_{}", i, j)),
+                                ),
                                 // TermInt <= arr_idx_i_j < TermInt
                                 // smt::TermX::and([
                                 //     smt::TermX::le(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
@@ -501,74 +549,116 @@ impl Interpretation {
                                 // ]),
                             ],
                             BaseType::BitVec(..) => vec![
-                                smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
-                                smt::TermX::eq(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
+                                smt::TermX::bvule(
+                                    index_grammar.clone(),
+                                    smt::TermX::var(format!("arr_idx_{}_{}", i, j)),
+                                ),
+                                smt::TermX::eq(
+                                    index_grammar.clone(),
+                                    smt::TermX::var(format!("arr_idx_{}_{}", i, j)),
+                                ),
                                 // smt::TermX::and([
                                 //     smt::TermX::bvule(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
                                 //     smt::TermX::bvugt(index_grammar.clone(), smt::TermX::var(format!("arr_idx_{}_{}", i, j))),
                                 // ]),
                             ],
-                            _ => unimplemented!()
+                            _ => unimplemented!(),
                         }
                     } else {
                         // No constraint on the array index if slicing is not enabled
                         vec![smt::TermX::bool(true)]
-                    }
+                    },
                 ));
             }
         }
 
         // Generate grammar for bit-vector terms
         for width in &used_widths {
-            symbols.push(smt::NonTerminal::new(format!("ConstantBV{}", width), smt::Sort::BitVec(*width), [
-                smt::TermX::bit_vec(0, *width),
-                smt::TermX::bvadd(smt::TermX::var(format!("ConstantBV{}", width)), smt::TermX::bit_vec(1, *width)),
-            ]));
-            symbols.push(smt::NonTerminal::new(format!("TermBV{}", width), smt::Sort::BitVec(*width),
-                    // Only add dependent variables of type bv{width}
-                    perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-                    match typ {
-                        BaseType::BitVec(w) if *w == *width => Some(smt::TermX::var(format!("x{}", i))),
-                        _ => None,
-                    }
-                ).chain([
+            symbols.push(smt::NonTerminal::new(
+                format!("ConstantBV{}", width),
+                smt::Sort::BitVec(*width),
+                [
                     smt::TermX::bit_vec(0, *width),
-                    smt::TermX::bit_vec(1, *width),
-                    smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::var(format!("TermBV{}", width))),
-                    // smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, *width)),
-                ]),
+                    smt::TermX::bvadd(
+                        smt::TermX::var(format!("ConstantBV{}", width)),
+                        smt::TermX::bit_vec(1, *width),
+                    ),
+                ],
+            ));
+            symbols.push(smt::NonTerminal::new(
+                format!("TermBV{}", width),
+                smt::Sort::BitVec(*width),
+                // Only add dependent variables of type bv{width}
+                perm_decl
+                    .param_typs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, typ)| match typ {
+                        BaseType::BitVec(w) if *w == *width => {
+                            Some(smt::TermX::var(format!("x{}", i)))
+                        }
+                        _ => None,
+                    })
+                    .chain([
+                        smt::TermX::bit_vec(0, *width),
+                        smt::TermX::bit_vec(1, *width),
+                        smt::TermX::bvadd(
+                            smt::TermX::var(format!("TermBV{}", width)),
+                            smt::TermX::var(format!("TermBV{}", width)),
+                        ),
+                        // smt::TermX::bvadd(smt::TermX::var(format!("TermBV{}", width)), smt::TermX::bit_vec(1, *width)),
+                    ]),
             ));
         }
 
         symbols.extend([
-            smt::NonTerminal::new("ConstantInt", smt::Sort::Int, [
-                smt::TermX::int(0),
-                smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
-            ]),
-            smt::NonTerminal::new("TermInt", smt::Sort::Int,
+            smt::NonTerminal::new(
+                "ConstantInt",
+                smt::Sort::Int,
+                [
+                    smt::TermX::int(0),
+                    smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
+                ],
+            ),
+            smt::NonTerminal::new(
+                "TermInt",
+                smt::Sort::Int,
                 // Only add dependent variables of type int
-                perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-                    match typ {
+                perm_decl
+                    .param_typs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, typ)| match typ {
                         BaseType::Int => Some(smt::TermX::var(format!("x{}", i))),
                         _ => None,
-                    }
-                ).chain([
-                    smt::TermX::int(0),
-                    smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
-                ]),
+                    })
+                    .chain([
+                        smt::TermX::int(0),
+                        smt::TermX::add(smt::TermX::var("TermInt"), smt::TermX::int(1)),
+                    ]),
             ),
-            smt::NonTerminal::new("TermBool", smt::Sort::Bool,
+            smt::NonTerminal::new(
+                "TermBool",
+                smt::Sort::Bool,
                 // Only add dependent variables of type bool
-                perm_decl.param_typs.iter().enumerate().filter_map(|(i, typ)|
-                    match typ {
+                perm_decl
+                    .param_typs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, typ)| match typ {
                         BaseType::Bool => Some(smt::TermX::var(format!("x{}", i))),
                         _ => None,
-                    }
-                )
-                .chain([ smt::TermX::le(smt::TermX::var("TermInt"), smt::TermX::var("ConstantInt")) ])
-                .chain(used_widths.iter().map(|width| smt::TermX::eq(
-                    smt::TermX::var(format!("TermBV{}", width)),
-                    smt::TermX::var(format!("ConstantBV{}", width))))),
+                    })
+                    .chain([smt::TermX::le(
+                        smt::TermX::var("TermInt"),
+                        smt::TermX::var("ConstantInt"),
+                    )])
+                    .chain(used_widths.iter().map(|width| {
+                        smt::TermX::eq(
+                            smt::TermX::var(format!("TermBV{}", width)),
+                            smt::TermX::var(format!("ConstantBV{}", width)),
+                        )
+                    })),
             ),
         ]);
 
@@ -715,7 +805,13 @@ impl Interpretation {
                 match mut_type {
                     MutTypeX::Base(..) => break,
                     MutTypeX::Array(t1, t2) => {
-                        arr_indices[mut_name].push((t1.clone(), smt::TermX::var(fresh_universal_var("arr_idx".to_string(), t1.as_smt_sort()))));
+                        arr_indices[mut_name].push((
+                            t1.clone(),
+                            smt::TermX::var(fresh_universal_var(
+                                "arr_idx".to_string(),
+                                t1.as_smt_sort(),
+                            )),
+                        ));
                         mut_type = t2.borrow();
                     }
                 }
@@ -753,7 +849,8 @@ impl Interpretation {
             // If the index is an SMT Int, we require that it is non-negative
             for (base, index) in indices {
                 if base.is_int() {
-                    interp.constraints
+                    interp
+                        .constraints
                         .push(smt::TermX::le(smt::TermX::int(0), index));
                 }
             }
@@ -819,7 +916,7 @@ impl Interpretation {
     }
 }
 
-impl PermJudgment {
+impl PermJudgmentX {
     fn generate_sygus_prelude() -> Vec<smt::Command> {
         vec![
             smt::CommandX::define_fun(
@@ -901,7 +998,7 @@ impl PermJudgment {
             ))
             .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
 
-        for cmd in PermJudgment::generate_sygus_prelude() {
+        for cmd in PermJudgmentX::generate_sygus_prelude() {
             solver
                 .send_command(cmd)
                 .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
@@ -930,7 +1027,9 @@ impl PermJudgment {
             .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?
         {
             smt::CheckSynthResult::Infeasible => Ok(None), // no solution possible
-            smt::CheckSynthResult::Fail => SpannedError::new_err(format!("solver failed to synthesize")),
+            smt::CheckSynthResult::Fail => {
+                SpannedError::new_err(format!("solver failed to synthesize"))
+            }
             smt::CheckSynthResult::Synthesized(model) => Ok(Some(model)),
         };
 
@@ -942,7 +1041,11 @@ impl PermJudgment {
     }
 
     // Check the validity of a single judgments with no permission variables
-    pub fn check_validity(&self, ctx: &Ctx, solver: &mut smt::Solver) -> Result<bool, SpannedError> {
+    pub fn check_validity(
+        &self,
+        ctx: &Ctx,
+        solver: &mut smt::Solver,
+    ) -> Result<bool, SpannedError> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut interp =
             Interpretation::new(&mut smt_ctx, &PermInferOptions::default(), ctx, false);
@@ -976,7 +1079,9 @@ impl PermJudgment {
         {
             smt::CheckSatResult::Sat => Ok(false),
             smt::CheckSatResult::Unsat => Ok(true),
-            smt::CheckSatResult::Unknown => SpannedError::new_err(format!("solver returned unknown")),
+            smt::CheckSatResult::Unknown => {
+                SpannedError::new_err(format!("solver returned unknown"))
+            }
         };
 
         solver
@@ -1009,7 +1114,7 @@ impl PermJudgment {
 
         // Only local variables need to be rebinded
         interp.vars.clear();
-        for (v, t) in &self.local.vars {
+        for (v, t) in self.local.vars() {
             if let TermTypeX::Base(t) = t.borrow() {
                 let fresh_var = smt::TermX::var(fresh_universal_var(
                     format!("var_{}", v.as_str()),
@@ -1030,27 +1135,32 @@ impl PermJudgment {
                 .collect::<Result<Vec<_>, _>>()?,
         );
 
-        let permission_constraint = self.perm_constraint.as_smt_term(smt_ctx, ctx, &self.local, &interp, &mut defined_constraints)?;
+        let permission_constraint = self.perm_constraint.as_smt_term(
+            smt_ctx,
+            ctx,
+            &self.local,
+            &interp,
+            &mut defined_constraints,
+        )?;
 
         let validity = smt::TermX::implies(
             smt::TermX::and([
                 // Add local constraints (path conditions)
                 path_condition,
-
                 // Add an assumption that all expressions are defined (i.e. no overflow)
                 smt::TermX::and(defined_constraints),
-
                 // TODO: this is a hacky assumption that there is no bit-vector overflowing
                 // we should generate more precise ones based on terms to avoid unsoundness
-                smt::TermX::and(
-                    self.local.vars
-                        .iter()
-                        .filter_map(|(v, t)| if let TermTypeX::Base(BaseType::BitVec(w)) = t.as_ref() {
-                            Some(smt::TermX::bvsge(&interp.vars[v], smt::TermX::bit_vec(0, *w)))
-                        } else {
-                            None
-                        }),
-                ),
+                smt::TermX::and(self.local.vars().filter_map(|(v, t)| {
+                    if let TermTypeX::Base(BaseType::BitVec(w)) = t.as_ref() {
+                        Some(smt::TermX::bvsge(
+                            &interp.vars[v],
+                            smt::TermX::bit_vec(0, *w),
+                        ))
+                    } else {
+                        None
+                    }
+                })),
             ]),
             permission_constraint,
         );
@@ -1125,19 +1235,24 @@ impl PermConstraintX {
                             )),
                             p.clone(),
                         ))
-                        .as_smt_term(smt_ctx, ctx, local, interp, defined_constraints)?,
+                        .as_smt_term(
+                            smt_ctx,
+                            ctx,
+                            local,
+                            interp,
+                            defined_constraints,
+                        )?,
                     ),
                 ))
             }
-            PermConstraintX::HasWrite(mut_ref, p) =>
-                Rc::new(PermConstraintX::LessEq(
-                    Spanned::new(PermissionX::Fraction(
-                        PermFraction::Write(0),
-                        mut_ref.clone(),
-                    )),
-                    p.clone(),
-                ))
-                .as_smt_term(smt_ctx, ctx, local, interp, defined_constraints),
+            PermConstraintX::HasWrite(mut_ref, p) => Rc::new(PermConstraintX::LessEq(
+                Spanned::new(PermissionX::Fraction(
+                    PermFraction::Write(0),
+                    mut_ref.clone(),
+                )),
+                p.clone(),
+            ))
+            .as_smt_term(smt_ctx, ctx, local, interp, defined_constraints),
         }
     }
 }
@@ -1158,5 +1273,15 @@ impl fmt::Display for PermConstraintX {
             PermConstraintX::HasRead(m, p) => write!(f, "read(*) {} <= {}", m, p),
             PermConstraintX::HasWrite(m, p) => write!(f, "write(0) {} <= {}", m, p),
         }
+    }
+}
+
+impl fmt::Display for PermJudgmentX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.local)?;
+        for local_constraint in &self.local_constraints {
+            write!(f, ", {}", local_constraint)?;
+        }
+        write!(f, " |= {}", self.perm_constraint)
     }
 }

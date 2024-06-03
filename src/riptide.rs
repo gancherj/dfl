@@ -3,11 +3,16 @@ use std::{fmt, io};
 
 use im::HashMap;
 use indexmap::{IndexMap, IndexSet};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::ast::{Program, ConstDeclX, BaseType};
+use crate::ast::{BaseType, ConstDeclX, Program};
 use crate::span::Spanned;
-use crate::{BitVecWidth, ChanDeclX, ChanName, Decl, MutDeclX, MutReferenceIndex, MutReferenceTypeX, MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam, ProcResource, ProcResourceX, ProcX, ProgramX, Term, TermType, TermTypeX, TermX, Var};
+use crate::{
+    BitVecWidth, ChanDeclX, ChanName, DeclX, MutDeclX, MutReferenceIndex, MutReferenceTypeX,
+    MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam,
+    ProcParamX, ProcResource, ProcResourceX, ProcX, ProgramX, Term, TermType, TermTypeX, TermX,
+    Var,
+};
 
 pub type ChannelId = u32;
 pub type OperatorId = u32;
@@ -88,9 +93,21 @@ pub struct Port(OperatorId, PortIndex);
 pub type Channel = Rc<ChannelX>;
 #[derive(Debug)]
 pub enum ChannelX {
-    Async { id: ChannelId, src: Port, dest: Port },
-    Const { id: ChannelId, value: ConstValue, hold: bool },
-    Param { id: ChannelId, param: Parameter, hold: bool },
+    Async {
+        id: ChannelId,
+        src: Port,
+        dest: Port,
+    },
+    Const {
+        id: ChannelId,
+        value: ConstValue,
+        hold: bool,
+    },
+    Param {
+        id: ChannelId,
+        param: Parameter,
+        hold: bool,
+    },
 }
 
 impl ChannelX {
@@ -162,7 +179,7 @@ impl ParamTypeX {
         match s.as_ref() {
             "i32" => Ok(Rc::new(ParamTypeX::Int(32))),
             "i32*" => Ok(Rc::new(ParamTypeX::Pointer(Rc::new(ParamTypeX::Int(32))))),
-            _ => Err(format!("unsupported parameter type `{}`", s.as_ref()))
+            _ => Err(format!("unsupported parameter type `{}`", s.as_ref())),
         }
     }
 }
@@ -183,48 +200,54 @@ impl OperatorKind {
                 Some(pred) if pred == "STREAM_CFG_PRED_TRUE" => Ok(OperatorKind::Stream(true)),
                 Some(pred) if pred == "STREAM_CFG_PRED_FALSE" => Ok(OperatorKind::Stream(false)),
                 Some(pred) => Err(format!("unknown predicate `{}` for stream", pred)),
-                None => Err(format!("predicate not specified for stream"))
-            }
+                None => Err(format!("predicate not specified for stream")),
+            },
             "CF_CFG_OP_CARRY" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Carry(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Carry(false)),
                 Some(pred) => Err(format!("unknown predicate `{}` for carry", pred)),
-                None => Err(format!("predicate not specified for carry"))
-            }
+                None => Err(format!("predicate not specified for carry")),
+            },
             "CF_CFG_OP_MERGE" => Ok(OperatorKind::Merge),
             "CF_CFG_OP_INVARIANT" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Inv(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Inv(false)),
                 Some(pred) => Err(format!("unknown predicate `{}` for invariant", pred)),
-                None => Err(format!("predicate not specified for invariant"))
-            }
+                None => Err(format!("predicate not specified for invariant")),
+            },
             "CF_CFG_OP_STEER" => match &raw.pred {
                 Some(pred) if pred == "CF_CFG_PRED_TRUE" => Ok(OperatorKind::Steer(true)),
                 Some(pred) if pred == "CF_CFG_PRED_FALSE" => Ok(OperatorKind::Steer(false)),
                 Some(pred) => Err(format!("unknown predicate `{}` for steer", pred)),
-                None => Err(format!("predicate not specified for steer"))
-            }
+                None => Err(format!("predicate not specified for steer")),
+            },
             "MEM_CFG_OP_LOAD" => match raw.inputs.len() {
                 2 => Ok(OperatorKind::Ld),
                 3 => Ok(OperatorKind::LdSync),
-                _ => Err(format!("load operator expected to have either 2 or 3 inputs, got {}", raw.inputs.len()))
-            }
+                _ => Err(format!(
+                    "load operator expected to have either 2 or 3 inputs, got {}",
+                    raw.inputs.len()
+                )),
+            },
             "MEM_CFG_OP_STORE" => match raw.inputs.len() {
                 3 => Ok(OperatorKind::St),
                 4 => Ok(OperatorKind::StSync),
-                _ => Err(format!("store operator expected to have either 3 or 4 inputs, got {}", raw.inputs.len()))
-            }
+                _ => Err(format!(
+                    "store operator expected to have either 3 or 4 inputs, got {}",
+                    raw.inputs.len()
+                )),
+            },
             _ => Err(format!("unsupported operator `{}`", raw.op)),
         }
     }
 }
 
 impl OperatorX {
-    pub fn ports(&self) -> impl Iterator<Item=&PortIndex> {
+    pub fn ports(&self) -> impl Iterator<Item = &PortIndex> {
         self.outputs.keys()
     }
 
-    pub fn outputs(&self, port: PortIndex) -> impl Iterator<Item=&Channel> {
+    pub fn outputs(&self, port: PortIndex) -> impl Iterator<Item = &Channel> {
         self.outputs.get(&port).map_or([].iter(), |v| v.iter())
     }
 }
@@ -242,11 +265,14 @@ impl Graph {
         let mut params = IndexMap::new();
         for arg in &raw.info.args {
             let name: ParamName = arg.name.as_str().into();
-            params.insert(name.clone(), Rc::new(ParameterX {
-                name: name,
-                typ: ParamTypeX::from_str(&arg.typ)?,
-                alias: arg.noalias == Some(false),
-            }));
+            params.insert(
+                name.clone(),
+                Rc::new(ParameterX {
+                    name: name,
+                    typ: ParamTypeX::from_str(&arg.typ)?,
+                    alias: arg.noalias == Some(false),
+                }),
+            );
         }
 
         // Generate channels
@@ -256,7 +282,9 @@ impl Graph {
         let mut chan_id = 0;
         for (vert_id, vert) in raw.vertices.iter().enumerate() {
             if vert_id != vert.id as usize {
-                return Err(format!("vertex id does not match with order in the vertices list"));
+                return Err(format!(
+                    "vertex id does not match with order in the vertices list"
+                ));
             }
 
             inputs.insert(vert.id, Vec::new());
@@ -276,7 +304,7 @@ impl Graph {
                                 src: Port(src_id, src_port),
                                 dest: Port(vert.id, input_port as PortIndex),
                             });
-                            
+
                             if !outputs.contains_key(&src_id) {
                                 outputs.insert(src_id, IndexMap::new());
                             }
@@ -292,23 +320,29 @@ impl Graph {
                         }
                     }
                     // Constant channel
-                    "const" =>
-                        Rc::new(ChannelX::Const {
-                            id: chan_id,
-                            value: input.value.ok_or(format!("value not available for constant channel"))?,
-                            hold: input.hold,
-                        }),
+                    "const" => Rc::new(ChannelX::Const {
+                        id: chan_id,
+                        value: input
+                            .value
+                            .ok_or(format!("value not available for constant channel"))?,
+                        hold: input.hold,
+                    }),
                     // Similar to constant channels but use a parameter
                     "xdata" => {
-                        let name = input.name.as_ref().ok_or(format!("param name not available"))?;
+                        let name = input
+                            .name
+                            .as_ref()
+                            .ok_or(format!("param name not available"))?;
                         Rc::new(ChannelX::Param {
                             id: chan_id,
-                            param: params.get(name.as_str().into())
-                                .ok_or(format!("parameter `{}` does not exist", name))?.clone(),
+                            param: params
+                                .get(name.as_str().into())
+                                .ok_or(format!("parameter `{}` does not exist", name))?
+                                .clone(),
                             hold: input.hold,
                         })
-                    },
-                    _ => return Err(format!("unsupported input type {}", input.kind))
+                    }
+                    _ => return Err(format!("unsupported input type {}", input.kind)),
                 };
 
                 chans.push(chan.clone());
@@ -344,7 +378,10 @@ impl Graph {
         format!("param_{}", param.name).into()
     }
 
-    fn join_term_types(t1: Option<&TermType>, t2: Option<&TermType>) -> Result<Option<TermType>, String> {
+    fn join_term_types(
+        t1: Option<&TermType>,
+        t2: Option<&TermType>,
+    ) -> Result<Option<TermType>, String> {
         if let (Some(t1), Some(t2)) = (t1, t2) {
             match (t1.as_ref(), t2.as_ref()) {
                 (TermTypeX::Base(b1), TermTypeX::Base(b2)) if b1 == b2 => Ok(Some(t1.clone())),
@@ -371,32 +408,39 @@ impl Graph {
 
     fn const_channel_to_term(word_width: BitVecWidth, chan: &Channel) -> Term {
         match chan.borrow() {
-            ChannelX::Const { value, .. } =>
+            ChannelX::Const { value, .. } => {
                 if *value >= 0 {
                     TermX::bit_vec(*value as u64, word_width)
                 } else {
                     TermX::bit_vec(u64::MAX - ((-*value) as u64), word_width)
                 }
-            ChannelX::Param { param, .. } =>
-                match param.typ.as_ref() {
-                    ParamTypeX::Int(..) => TermX::constant(Self::param_name(param)),
-                    ParamTypeX::Pointer(..) =>
-                        if param.alias {
-                            // &mem[param_{name}..]
-                            TermX::reference(MutReferenceX::slice(
-                                MutReferenceX::base("mem"),
-                                Some(&TermX::constant(Self::param_name(param))),
-                                None,
-                            ))
-                        } else {
-                            TermX::reference(MutReferenceX::base(Self::param_name(param)))
-                        }
+            }
+            ChannelX::Param { param, .. } => match param.typ.as_ref() {
+                ParamTypeX::Int(..) => TermX::constant(Self::param_name(param)),
+                ParamTypeX::Pointer(..) => {
+                    if param.alias {
+                        // &mem[param_{name}..]
+                        TermX::reference(MutReferenceX::slice(
+                            MutReferenceX::base("mem"),
+                            Some(&TermX::constant(Self::param_name(param))),
+                            None,
+                        ))
+                    } else {
+                        TermX::reference(MutReferenceX::base(Self::param_name(param)))
+                    }
                 }
-            _ => unreachable!()
+            },
+            _ => unreachable!(),
         }
     }
 
-    fn recv_from_input(opts: &TranslationOptions, op: &Operator, port: usize, var: impl Into<Var>, k: impl Borrow<Proc>) -> Proc {
+    fn recv_from_input(
+        opts: &TranslationOptions,
+        op: &Operator,
+        port: usize,
+        var: impl Into<Var>,
+        k: impl Borrow<Proc>,
+    ) -> Proc {
         let chan = &op.inputs[port];
 
         if chan.is_hold() {
@@ -409,7 +453,12 @@ impl Graph {
         }
     }
 
-    fn send_to_outputs(op: &Operator, port: PortIndex, term: impl Borrow<Term>, k: impl Borrow<Proc>) -> Proc {
+    fn send_to_outputs(
+        op: &Operator,
+        port: PortIndex,
+        term: impl Borrow<Term>,
+        k: impl Borrow<Proc>,
+    ) -> Proc {
         let mut proc = k.borrow().clone();
         for output in op.outputs(port) {
             proc = ProcX::send(Self::channel_name(output), term.borrow().clone(), proc);
@@ -430,7 +479,11 @@ impl Graph {
         res
     }
 
-    fn infer_channel_types_from_constants(&self, opts: &TranslationOptions, chan_types: &mut IndexMap<ChannelId, TermType>) {
+    fn infer_channel_types_from_constants(
+        &self,
+        opts: &TranslationOptions,
+        chan_types: &mut IndexMap<ChannelId, TermType>,
+    ) {
         for chan in &self.chans {
             match chan.borrow() {
                 ChannelX::Const { id, .. } => {
@@ -443,25 +496,29 @@ impl Graph {
                             // bv<width>
                             chan_types.insert(*id, TermTypeX::bit_vec(*width));
                         }
-                        ParamTypeX::Pointer(base) =>
-                            match base.borrow() {
-                                ParamTypeX::Int(..) =>
-                                    if param.alias {
-                                        // &mem[*..]
-                                        chan_types.insert(*id, TermTypeX::mut_ref([
-                                            MutReferenceTypeX::offset(
-                                                MutReferenceTypeX::base("mem"),
-                                                MutReferenceIndex::Unknown,
-                                            )
-                                        ]));
-                                    } else {
-                                        // &param_<name>
-                                        chan_types.insert(*id, TermTypeX::mut_ref([
-                                            MutReferenceTypeX::base(Self::param_name(param)),
-                                        ]));
-                                    }
-                                ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
+                        ParamTypeX::Pointer(base) => match base.borrow() {
+                            ParamTypeX::Int(..) => {
+                                if param.alias {
+                                    // &mem[*..]
+                                    chan_types.insert(
+                                        *id,
+                                        TermTypeX::mut_ref([MutReferenceTypeX::offset(
+                                            MutReferenceTypeX::base("mem"),
+                                            MutReferenceIndex::Unknown,
+                                        )]),
+                                    );
+                                } else {
+                                    // &param_<name>
+                                    chan_types.insert(
+                                        *id,
+                                        TermTypeX::mut_ref([MutReferenceTypeX::base(
+                                            Self::param_name(param),
+                                        )]),
+                                    );
+                                }
                             }
+                            ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
+                        },
                     };
                 }
 
@@ -469,54 +526,77 @@ impl Graph {
                 _ => {}
             };
         }
-
     }
 
     /// Propagate inferred types to other channels
-    fn propagate_inferred_type(&self, opts: &TranslationOptions, chan_types: &mut IndexMap<ChannelId, TermType>) -> Result<bool, String> {
+    fn propagate_inferred_type(
+        &self,
+        opts: &TranslationOptions,
+        chan_types: &mut IndexMap<ChannelId, TermType>,
+    ) -> Result<bool, String> {
         let mut changed = false;
 
         let mut update_chan_typ =
-            |chan_types: &mut IndexMap<_, _>, chan: &Channel, typ: &TermType|
-            if !chan_types.contains_key(&chan.id()) {
-                chan_types.insert(chan.id(), typ.clone());
-                // println!("channel {}: {}", chan.id(), typ);
-                changed = true;
-            } else if &chan_types[&chan.id()] != typ {
-                chan_types.insert(chan.id(), typ.clone());
-                // println!("channel {}: {}", chan.id(), typ);
-                changed = true;
+            |chan_types: &mut IndexMap<_, _>, chan: &Channel, typ: &TermType| {
+                if !chan_types.contains_key(&chan.id()) {
+                    chan_types.insert(chan.id(), typ.clone());
+                    // println!("channel {}: {}", chan.id(), typ);
+                    changed = true;
+                } else if &chan_types[&chan.id()] != typ {
+                    chan_types.insert(chan.id(), typ.clone());
+                    // println!("channel {}: {}", chan.id(), typ);
+                    changed = true;
+                }
             };
 
         for op in &self.ops {
             match op.kind {
-                OperatorKind::Add | OperatorKind::Mul |
-                OperatorKind::ULT | OperatorKind::SLT |
-                OperatorKind::SGT | OperatorKind::Eq |
-                OperatorKind::Ld | OperatorKind::LdSync |
-                OperatorKind::St | OperatorKind::StSync |
-                OperatorKind::Stream(..) =>
-                    // Always output bv<word_width>
+                OperatorKind::Add
+                | OperatorKind::Mul
+                | OperatorKind::ULT
+                | OperatorKind::SLT
+                | OperatorKind::SGT
+                | OperatorKind::Eq
+                | OperatorKind::Ld
+                | OperatorKind::LdSync
+                | OperatorKind::St
+                | OperatorKind::StSync
+                | OperatorKind::Stream(..) =>
+                // Always output bv<word_width>
+                {
                     for port in op.ports() {
                         for output in op.outputs(*port) {
-                            update_chan_typ(chan_types, output, &TermTypeX::bit_vec(opts.word_width));
+                            update_chan_typ(
+                                chan_types,
+                                output,
+                                &TermTypeX::bit_vec(opts.word_width),
+                            );
                         }
                     }
+                }
 
                 OperatorKind::GEP =>
-                    // Always output references
+                // Always output references
+                {
                     if let Some(input) = op.inputs.get(0) {
                         if let Some(typ) = chan_types.get(&input.id()) {
                             let ref_type = match typ.as_ref() {
-                                TermTypeX::Base(_) => return Err(format!("base type {} passed into GEP", typ)),
-                                TermTypeX::Ref(refs) =>
-                                    TermTypeX::mut_ref(refs.iter().map(
-                                        |r| match r.as_ref() {
-                                            MutReferenceTypeX::Base(..) => MutReferenceTypeX::offset(r, MutReferenceIndex::Unknown),
-                                            MutReferenceTypeX::Index(..) => MutReferenceTypeX::offset(r, MutReferenceIndex::Unknown),
-                                            MutReferenceTypeX::Offset(m, ..) => MutReferenceTypeX::offset(m, MutReferenceIndex::Unknown),
+                                TermTypeX::Base(_) => {
+                                    return Err(format!("base type {} passed into GEP", typ))
+                                }
+                                TermTypeX::Ref(refs) => {
+                                    TermTypeX::mut_ref(refs.iter().map(|r| match r.as_ref() {
+                                        MutReferenceTypeX::Base(..) => {
+                                            MutReferenceTypeX::offset(r, MutReferenceIndex::Unknown)
                                         }
-                                    )),
+                                        MutReferenceTypeX::Index(..) => {
+                                            MutReferenceTypeX::offset(r, MutReferenceIndex::Unknown)
+                                        }
+                                        MutReferenceTypeX::Offset(m, ..) => {
+                                            MutReferenceTypeX::offset(m, MutReferenceIndex::Unknown)
+                                        }
+                                    }))
+                                }
                             };
 
                             // Propagate type to outputs
@@ -525,18 +605,23 @@ impl Graph {
                             }
                         }
                     }
+                }
 
                 OperatorKind::Select | OperatorKind::Carry(..) | OperatorKind::Merge =>
-                    // Output of Merge is the join of input types
+                // Output of Merge is the join of input types
+                {
                     if let (Some(input1), Some(input2)) = (op.inputs.get(1), op.inputs.get(2)) {
-                        if let Some(typ) =
-                            Self::join_term_types(chan_types.get(&input1.id()), chan_types.get(&input2.id()))? {
+                        if let Some(typ) = Self::join_term_types(
+                            chan_types.get(&input1.id()),
+                            chan_types.get(&input2.id()),
+                        )? {
                             // println!("merged type: {} {}", op.id, typ);
                             for output in op.outputs(0) {
                                 update_chan_typ(chan_types, output, &typ);
                             }
                         }
                     }
+                }
 
                 OperatorKind::Id => {
                     // Inv is polymorphic on the type of the first input
@@ -583,39 +668,41 @@ impl Graph {
             match param.typ.borrow() {
                 ParamTypeX::Int(width) => {
                     if *width != opts.word_width {
-                        return Err(format!("parameter `{}` has a different width {} from the word width {}", param.name, width, opts.word_width));
+                        return Err(format!(
+                            "parameter `{}` has a different width {} from the word width {}",
+                            param.name, width, opts.word_width
+                        ));
                     }
                     consts.push(Spanned::new(ConstDeclX {
                         name: Self::param_name(param).into(),
                         typ: BaseType::BitVec(*width),
                     }));
                 }
-                ParamTypeX::Pointer(base) =>
-                    match base.borrow() {
-                        ParamTypeX::Int(width) => {
-                            if !param.alias {
-                                muts.push(Spanned::new(MutDeclX {
-                                    name: Self::param_name(param).into(),
-                                    typ: MutTypeX::array(
-                                        BaseType::BitVec(opts.word_width),
-                                        MutTypeX::base(BaseType::BitVec(*width)),
-                                    ),
-                                }));
-                            } else {
-                                if *width != opts.word_width {
-                                    return Err(format!("parameter `{}` points to a different width {} from the word width {}", param.name, width, opts.word_width));
-                                }
-                                has_alias = true;
-
-                                // Add a constant pointer into the memory
-                                consts.push(Spanned::new(ConstDeclX {
-                                    name: Self::param_name(param).into(),
-                                    typ: BaseType::BitVec(opts.word_width),
-                                }));
+                ParamTypeX::Pointer(base) => match base.borrow() {
+                    ParamTypeX::Int(width) => {
+                        if !param.alias {
+                            muts.push(Spanned::new(MutDeclX {
+                                name: Self::param_name(param).into(),
+                                typ: MutTypeX::array(
+                                    BaseType::BitVec(opts.word_width),
+                                    MutTypeX::base(BaseType::BitVec(*width)),
+                                ),
+                            }));
+                        } else {
+                            if *width != opts.word_width {
+                                return Err(format!("parameter `{}` points to a different width {} from the word width {}", param.name, width, opts.word_width));
                             }
-                        },
-                        ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
+                            has_alias = true;
+
+                            // Add a constant pointer into the memory
+                            consts.push(Spanned::new(ConstDeclX {
+                                name: Self::param_name(param).into(),
+                                typ: BaseType::BitVec(opts.word_width),
+                            }));
+                        }
                     }
+                    ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
+                },
             }
         }
 
@@ -648,23 +735,28 @@ impl Graph {
             let chan_type = &chan_types[&chan.id()];
 
             let perm_var: PermVar = format!("p{}", perms.len()).into();
-            perms.push(Spanned::new(PermDeclX {
-                name: perm_var.clone(),
-                param_typs: match chan_type.borrow() {
-                    TermTypeX::Base(b@BaseType::BitVec(..)) => vec![b.clone()],
+            perms.push(PermDeclX::new(
+                &perm_var,
+                match chan_type.borrow() {
+                    TermTypeX::Base(b @ BaseType::BitVec(..)) => vec![b.clone()],
                     _ => vec![],
                 },
-            }));
+            ));
 
             // chan c<id>: <type> | p(c<id>) (if type is bv)
             // chan c<id>: <type> | p() (otherwise)
             chans.push(Spanned::new(ChanDeclX {
                 name: Self::channel_name(chan),
                 typ: chan_type.clone(),
-                perm: PermissionX::var(perm_var, match chan_type.borrow() {
-                    TermTypeX::Base(BaseType::BitVec(..)) => vec![TermX::var(&Self::channel_name(chan))],
-                    _ => vec![],
-                }),
+                perm: PermissionX::var(
+                    &perm_var,
+                    match chan_type.borrow() {
+                        TermTypeX::Base(BaseType::BitVec(..)) => {
+                            vec![TermX::var(&Self::channel_name(chan))]
+                        }
+                        _ => vec![],
+                    },
+                ),
             }))
         }
 
@@ -674,7 +766,11 @@ impl Graph {
 
         for chan in &self.chans {
             if chan.is_constant() && !chan.is_hold() {
-                entry_proc = ProcX::send(Self::channel_name(chan), Self::const_channel_to_term(opts.word_width, chan), entry_proc);
+                entry_proc = ProcX::send(
+                    Self::channel_name(chan),
+                    Self::const_channel_to_term(opts.word_width, chan),
+                    entry_proc,
+                );
             }
         }
 
@@ -683,12 +779,12 @@ impl Graph {
             let name = Self::proc_name(op);
 
             let perm_var: PermVar = format!("p{}", perms.len()).into();
-            perms.push(Spanned::new(PermDeclX {
-                name: perm_var.clone(),
-                param_typs: vec![],
-            }));
+            perms.push(PermDeclX::new(&perm_var, []));
 
-            let mut res = vec![ProcResourceX::perm(PermissionX::var(perm_var, [] as [Term; 0]))];
+            let mut res = vec![ProcResourceX::perm(PermissionX::var(
+                &perm_var,
+                [] as [Term; 0],
+            ))];
             res.extend(Self::gen_io_resources(op));
 
             let recurse = ProcX::call(name.clone(), [] as [Term; 0]);
@@ -696,349 +792,711 @@ impl Graph {
             entry_proc = ProcX::par(recurse.clone(), entry_proc);
 
             match op.kind {
-                OperatorKind::Id =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::send_to_outputs(op, 0, TermX::var("a"),
-                            recurse)),
-                    })),
+                OperatorKind::Id => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::send_to_outputs(op, 0, TermX::var("a"), recurse),
+                    ),
+                )),
 
-                OperatorKind::Add =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
-                            Self::send_to_outputs(op, 0, TermX::bvadd(TermX::var("a"), TermX::var("b")),
-                            recurse))),
-                    })),
+                OperatorKind::Add => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
+                            Self::send_to_outputs(
+                                op,
+                                0,
+                                TermX::bvadd(TermX::var("a"), TermX::var("b")),
+                                recurse,
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::Mul =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
-                            Self::send_to_outputs(op, 0, TermX::bvmul(TermX::var("a"), TermX::var("b")),
-                            recurse))),
-                    })),
+                OperatorKind::Mul => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
+                            Self::send_to_outputs(
+                                op,
+                                0,
+                                TermX::bvmul(TermX::var("a"), TermX::var("b")),
+                                recurse,
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::ULT =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
+                OperatorKind::ULT => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
                             ProcX::ite(
                                 TermX::bvult(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone()),
-                            ))),
-                    })),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(1, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(0, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::SLT =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
+                OperatorKind::SLT => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
                             ProcX::ite(
                                 TermX::bvslt(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone()),
-                            ))),
-                    })),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(1, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(0, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::SGT =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
+                OperatorKind::SGT => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
                             ProcX::ite(
                                 TermX::bvsgt(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone()),
-                            ))),
-                    })),
-                
-                OperatorKind::Eq =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "a",
-                            Self::recv_from_input(opts, op, 1, "b",
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(1, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(0, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
+
+                OperatorKind::Eq => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "a",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "b",
                             ProcX::ite(
                                 TermX::eq(TermX::var("a"), TermX::var("b")),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(1, opts.word_width),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                                    recurse.clone()),
-                            ))),
-                    })),
-                
-                OperatorKind::Select =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "d",
-                            Self::recv_from_input(opts, op, 1, "a",
-                            Self::recv_from_input(opts, op, 2, "b",
-                            ProcX::ite(
-                                TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))),
-                                Self::send_to_outputs(op, 0, TermX::var("a"),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::var("b"),
-                                    recurse.clone()),
-                            )))),
-                    })),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(1, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::bit_vec(0, opts.word_width),
+                                    recurse.clone(),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::GEP =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "r",
-                            Self::recv_from_input(opts, op, 1, "i",
-                            Self::send_to_outputs(op, 0,
+                OperatorKind::Select => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "d",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "a",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                2,
+                                "b",
+                                ProcX::ite(
+                                    TermX::not(TermX::eq(
+                                        TermX::var("d"),
+                                        TermX::bit_vec(0, opts.word_width),
+                                    )),
+                                    Self::send_to_outputs(op, 0, TermX::var("a"), recurse.clone()),
+                                    Self::send_to_outputs(op, 0, TermX::var("b"), recurse.clone()),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
+
+                OperatorKind::GEP => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "r",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "i",
+                            Self::send_to_outputs(
+                                op,
+                                0,
                                 // &*r[i..]
-                                TermX::reference(MutReferenceX::slice(MutReferenceX::deref(TermX::var("r")), Some(&TermX::var("i")), None)),
-                                recurse.clone()))),
-                    })),
+                                TermX::reference(MutReferenceX::slice(
+                                    MutReferenceX::deref(TermX::var("r")),
+                                    Some(&TermX::var("i")),
+                                    None,
+                                )),
+                                recurse.clone(),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::Ld =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "r",
-                            Self::recv_from_input(opts, op, 1, "i",
-                            ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
-                            Self::send_to_outputs(op, 0, TermX::var("v"),
-                            recurse)))),
-                    })),
+                OperatorKind::Ld => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "r",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "i",
+                            ProcX::read(
+                                MutReferenceX::index(
+                                    MutReferenceX::deref(TermX::var("r")),
+                                    TermX::var("i"),
+                                ),
+                                "v",
+                                Self::send_to_outputs(op, 0, TermX::var("v"), recurse),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::LdSync =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "r",
-                            Self::recv_from_input(opts, op, 1, "i",
-                            Self::recv_from_input(opts, op, 2, "s",
-                            ProcX::read(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), "v",
-                            Self::send_to_outputs(op, 0, TermX::var("v"),
-                            recurse))))),
-                    })),
+                OperatorKind::LdSync => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "r",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "i",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                2,
+                                "s",
+                                ProcX::read(
+                                    MutReferenceX::index(
+                                        MutReferenceX::deref(TermX::var("r")),
+                                        TermX::var("i"),
+                                    ),
+                                    "v",
+                                    Self::send_to_outputs(op, 0, TermX::var("v"), recurse),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::St =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "r",
-                            Self::recv_from_input(opts, op, 1, "i",
-                            Self::recv_from_input(opts, op, 2, "v",
-                            ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
-                            Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                            recurse.clone()))))),
-                    })),
+                OperatorKind::St => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "r",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "i",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                2,
+                                "v",
+                                ProcX::write(
+                                    MutReferenceX::index(
+                                        MutReferenceX::deref(TermX::var("r")),
+                                        TermX::var("i"),
+                                    ),
+                                    TermX::var("v"),
+                                    Self::send_to_outputs(
+                                        op,
+                                        0,
+                                        TermX::bit_vec(0, opts.word_width),
+                                        recurse.clone(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::StSync =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "r",
-                            Self::recv_from_input(opts, op, 1, "i",
-                            Self::recv_from_input(opts, op, 2, "v",
-                            Self::recv_from_input(opts, op, 3, "s",
-                            ProcX::write(MutReferenceX::index(MutReferenceX::deref(TermX::var("r")), TermX::var("i")), TermX::var("v"),
-                            Self::send_to_outputs(op, 0, TermX::bit_vec(0, opts.word_width),
-                            recurse)))))),
-                    })),
+                OperatorKind::StSync => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "r",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "i",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                2,
+                                "v",
+                                Self::recv_from_input(
+                                    opts,
+                                    op,
+                                    3,
+                                    "s",
+                                    ProcX::write(
+                                        MutReferenceX::index(
+                                            MutReferenceX::deref(TermX::var("r")),
+                                            TermX::var("i"),
+                                        ),
+                                        TermX::var("v"),
+                                        Self::send_to_outputs(
+                                            op,
+                                            0,
+                                            TermX::bit_vec(0, opts.word_width),
+                                            recurse,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
 
-                OperatorKind::Steer(pred) =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "d",
-                            Self::recv_from_input(opts, op, 1, "v",
+                OperatorKind::Steer(pred) => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "d",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "v",
                             ProcX::ite(
                                 if pred {
-                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width)))
+                                    TermX::not(TermX::eq(
+                                        TermX::var("d"),
+                                        TermX::bit_vec(0, opts.word_width),
+                                    ))
                                 } else {
                                     TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
                                 },
-                                Self::send_to_outputs(op, 0, TermX::var("v"),
-                                    recurse.clone()),
+                                Self::send_to_outputs(op, 0, TermX::var("v"), recurse.clone()),
                                 recurse.clone(),
-                            ))),
-                    })),
+                            ),
+                        ),
+                    ),
+                )),
 
                 OperatorKind::Inv(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    let inv_type = &chan_types[&op.inputs[1].id()];
-
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state1.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 1, "a",
-                            Self::send_to_outputs(op, 0, TermX::var("a"),
-                            ProcX::call(state2.clone(), [TermX::var("a")]))),
-                    }));
+                    procs.push(ProcDeclX::new(
+                        &state1,
+                        [] as [ProcParam; 0],
+                        res,
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "a",
+                            Self::send_to_outputs(
+                                op,
+                                0,
+                                TermX::var("a"),
+                                ProcX::call(state2.clone(), [TermX::var("a")]),
+                            ),
+                        ),
+                    ));
 
                     // Generate a new permission var for the second state
+                    let inv_type = &chan_types[&op.inputs[1].id()];
                     let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    perms.push(Spanned::new(PermDeclX {
-                        name: perm_var.clone(),
-                        param_typs: vec![BaseType::BitVec(opts.word_width)],
-                    }));
+                    match inv_type.as_ref() {
+                        TermTypeX::Base(base) => {
+                            perms.push(PermDeclX::new(&perm_var, [base.clone()]))
+                        }
+                        TermTypeX::Ref(..) =>
+                        // TODO: reference dependency not supported
+                        {
+                            perms.push(PermDeclX::new(&perm_var, []))
+                        }
+                    }
 
                     let mut res = vec![
                         // p(inv_value)
-                        ProcResourceX::perm(PermissionX::var(perm_var, [
-                            TermX::var("a"),
-                        ]))
+                        ProcResourceX::perm(PermissionX::var(&perm_var, [TermX::var("a")])),
                     ];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state2.clone(),
-                        params: vec![ProcParam { name: "a".into(), typ: inv_type.clone() }],
-                        res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "d",
+                    procs.push(ProcDeclX::new(
+                        &state2,
+                        [ProcParamX::new("a", inv_type)],
+                        res,
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            0,
+                            "d",
                             ProcX::ite(
                                 if pred {
-                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width)))
+                                    TermX::not(TermX::eq(
+                                        TermX::var("d"),
+                                        TermX::bit_vec(0, opts.word_width),
+                                    ))
                                 } else {
                                     TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
                                 },
-                                Self::send_to_outputs(op, 0, TermX::var("a"),
-                                    ProcX::call(state2.clone(), [TermX::var("a")])),
+                                Self::send_to_outputs(
+                                    op,
+                                    0,
+                                    TermX::var("a"),
+                                    ProcX::call(state2.clone(), [TermX::var("a")]),
+                                ),
                                 ProcX::call(state1.clone(), [] as [Term; 0]),
-                            )),
-                    }));
+                            ),
+                        ),
+                    ));
                 }
 
                 OperatorKind::Stream(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    let inv_type = &chan_types[&op.inputs[1].id()];
-
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state1.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 1, "start",
-                            Self::recv_from_input(opts, op, 1, "bound",
-                            Self::recv_from_input(opts, op, 1, "step",
-                            ProcX::call(state2.clone(), [TermX::var("start"), TermX::var("bound"), TermX::var("step")])))),
-                    }));
+                    procs.push(ProcDeclX::new(
+                        &state1,
+                        [] as [ProcParam; 0],
+                        res,
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "start",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                1,
+                                "bound",
+                                Self::recv_from_input(
+                                    opts,
+                                    op,
+                                    1,
+                                    "step",
+                                    ProcX::call(
+                                        state2.clone(),
+                                        [
+                                            TermX::var("start"),
+                                            TermX::var("bound"),
+                                            TermX::var("step"),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ));
 
                     // Generate a new permission var for the second state
                     let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    perms.push(Spanned::new(PermDeclX {
-                        name: perm_var.clone(),
-                        param_typs: vec![
+                    perms.push(PermDeclX::new(
+                        &perm_var,
+                        [
                             BaseType::BitVec(opts.word_width),
                             BaseType::BitVec(opts.word_width),
                             BaseType::BitVec(opts.word_width),
                         ],
-                    }));
+                    ));
 
                     let mut res = vec![
                         // p(start, bound, step)
-                        ProcResourceX::perm(PermissionX::var(perm_var, [
-                            TermX::var("start"),
-                            TermX::var("bound"),
-                            TermX::var("step"),
-                        ]))
+                        ProcResourceX::perm(PermissionX::var(
+                            &perm_var,
+                            [TermX::var("start"), TermX::var("bound"), TermX::var("step")],
+                        )),
                     ];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state2.clone(),
-                        params: vec![
-                            ProcParam { name: "start".into(), typ: inv_type.clone() },
-                            ProcParam { name: "bound".into(), typ: inv_type.clone() },
-                            ProcParam { name: "step".into(), typ: inv_type.clone() },
+                    procs.push(ProcDeclX::new(
+                        &state2,
+                        [
+                            ProcParamX::new("start", TermTypeX::bit_vec(opts.word_width)),
+                            ProcParamX::new("bound", TermTypeX::bit_vec(opts.word_width)),
+                            ProcParamX::new("step", TermTypeX::bit_vec(opts.word_width)),
                         ],
-                        res, all_res: false,
-                        body: ProcX::ite(
-                                TermX::bvslt(TermX::var("start"), TermX::var("bound")),
-                                Self::send_to_outputs(op, 0, TermX::var("start"),
-                                    Self::send_to_outputs(op, 1, TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width),
-                                    ProcX::call(state2.clone(), [
-                                        TermX::bvadd(TermX::var("start"), TermX::var("step")),
-                                        TermX::var("bound"),
-                                        TermX::var("step"),
-                                    ]))),
-                                Self::send_to_outputs(op, 1, TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width),
-                                    ProcX::call(state1.clone(), [] as [Term; 0])),
+                        res,
+                        ProcX::ite(
+                            TermX::bvslt(TermX::var("start"), TermX::var("bound")),
+                            Self::send_to_outputs(
+                                op,
+                                0,
+                                TermX::var("start"),
+                                Self::send_to_outputs(
+                                    op,
+                                    1,
+                                    TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width),
+                                    ProcX::call(
+                                        state2.clone(),
+                                        [
+                                            TermX::bvadd(TermX::var("start"), TermX::var("step")),
+                                            TermX::var("bound"),
+                                            TermX::var("step"),
+                                        ],
+                                    ),
+                                ),
                             ),
-                    }));
+                            Self::send_to_outputs(
+                                op,
+                                1,
+                                TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width),
+                                ProcX::call(state1.clone(), [] as [Term; 0]),
+                            ),
+                        ),
+                    ));
                 }
 
                 OperatorKind::Carry(pred) => {
                     let state1: ProcName = name.clone();
                     let state2: ProcName = format!("{}Loop", name).into();
 
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state1.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 1, "a",
-                            Self::send_to_outputs(op, 0, TermX::var("a"),
-                            ProcX::call(state2.clone(), [] as [Term; 0]))),
-                    }));
+                    procs.push(ProcDeclX::new(
+                        &state1,
+                        [] as [ProcParam; 0],
+                        res,
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "a",
+                            Self::send_to_outputs(
+                                op,
+                                0,
+                                TermX::var("a"),
+                                ProcX::call(state2.clone(), [] as [Term; 0]),
+                            ),
+                        ),
+                    ));
 
                     // Generate a new permission var for the second state
                     let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    perms.push(Spanned::new(PermDeclX {
-                        name: perm_var.clone(),
-                        param_typs: vec![],
-                    }));
+                    perms.push(PermDeclX::new(&perm_var, []));
 
-                    let mut res = vec![ProcResourceX::perm(PermissionX::var(perm_var, [] as [Term; 0]))];
+                    let mut res = vec![ProcResourceX::perm(PermissionX::var(
+                        &perm_var,
+                        [] as [Term; 0],
+                    ))];
                     res.extend(Self::gen_io_resources(op));
 
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: state2.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "d",
+                    procs.push(ProcDeclX::new(
+                        &state2,
+                        [] as [ProcParam; 0],
+                        res,
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            0,
+                            "d",
                             ProcX::ite(
                                 if pred {
-                                    TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width)))
+                                    TermX::not(TermX::eq(
+                                        TermX::var("d"),
+                                        TermX::bit_vec(0, opts.word_width),
+                                    ))
                                 } else {
                                     TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
                                 },
-                                Self::recv_from_input(opts, op, 2, "b",
-                                    Self::send_to_outputs(op, 0, TermX::var("b"),
-                                    ProcX::call(state2.clone(), [] as [Term; 0]))),
+                                Self::recv_from_input(
+                                    opts,
+                                    op,
+                                    2,
+                                    "b",
+                                    Self::send_to_outputs(
+                                        op,
+                                        0,
+                                        TermX::var("b"),
+                                        ProcX::call(state2.clone(), [] as [Term; 0]),
+                                    ),
+                                ),
                                 ProcX::call(state1.clone(), [] as [Term; 0]),
-                            )),
-                    }));
+                            ),
+                        ),
+                    ));
                 }
 
-                OperatorKind::Merge =>
-                    procs.push(Spanned::new(ProcDeclX {
-                        name: name.clone(), params: vec![], res, all_res: false,
-                        body: Self::recv_from_input(opts, op, 0, "d",
-                            Self::recv_from_input(opts, op, 1, "a",
-                            Self::recv_from_input(opts, op, 2, "b",
-                            ProcX::ite(
-                                TermX::not(TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))),
-                                Self::send_to_outputs(op, 0, TermX::var("a"),
-                                    recurse.clone()),
-                                Self::send_to_outputs(op, 0, TermX::var("b"),
-                                    recurse.clone()),
-                            )))),
-                    })),
+                OperatorKind::Merge => procs.push(ProcDeclX::new(
+                    name,
+                    [] as [ProcParam; 0],
+                    res,
+                    Self::recv_from_input(
+                        opts,
+                        op,
+                        0,
+                        "d",
+                        Self::recv_from_input(
+                            opts,
+                            op,
+                            1,
+                            "a",
+                            Self::recv_from_input(
+                                opts,
+                                op,
+                                2,
+                                "b",
+                                ProcX::ite(
+                                    TermX::not(TermX::eq(
+                                        TermX::var("d"),
+                                        TermX::bit_vec(0, opts.word_width),
+                                    )),
+                                    Self::send_to_outputs(op, 0, TermX::var("a"), recurse.clone()),
+                                    Self::send_to_outputs(op, 0, TermX::var("b"), recurse.clone()),
+                                ),
+                            ),
+                        ),
+                    ),
+                )),
             }
         }
 
         // Finally, generate an entry process `Program`
-        procs.push(Spanned::new(ProcDeclX {
-            name: "Program".into(),
-            params: vec![],
-            res: vec![],
-            all_res: true,
-            body: entry_proc,
-        }));
+        procs.push(ProcDeclX::new_all_res(
+            "Program",
+            [] as [ProcParam; 0],
+            entry_proc,
+        ));
 
         Ok(Rc::new(ProgramX {
-            decls: consts.into_iter().map(|d| Decl::Const(d))
-                .chain(muts.into_iter().map(|d| Decl::Mut(d)))
-                .chain(perms.into_iter().map(|d| Decl::Perm(d)))
-                .chain(chans.into_iter().map(|d| Decl::Chan(d)))
-                .chain(procs.into_iter().map(|d| Decl::Proc(d)))
+            decls: consts
+                .iter()
+                .map(|d| DeclX::new_const(d))
+                .chain(muts.iter().map(|d| DeclX::new_mut(d)))
+                .chain(perms.iter().map(|d| DeclX::new_perm(d)))
+                .chain(chans.iter().map(|d| DeclX::new_chan(d)))
+                .chain(procs.iter().map(|d| DeclX::new_proc(d)))
                 .collect(),
         }))
     }

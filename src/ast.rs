@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::{borrow::Borrow, fmt};
 
+use im::{vector, Vector};
 use indexmap::{IndexMap, IndexSet};
 
 use crate::span::*;
@@ -86,7 +87,7 @@ pub enum PermissionX {
     Sub(Permission, Permission),
     Ite(Term, Permission, Permission),
     Fraction(PermFraction, MutReference),
-    Var(PermVar, Vec<Term>),
+    Var(PermVar, Vector<Term>),
 }
 
 pub type BitVecWidth = u32;
@@ -102,7 +103,7 @@ pub type TermType = Rc<TermTypeX>;
 #[derive(Eq, PartialEq, Debug)]
 pub enum TermTypeX {
     Base(BaseType),
-    Ref(Vec<MutReferenceType>),
+    Ref(Vector<MutReferenceType>),
 }
 
 pub type MutType = Rc<MutTypeX>;
@@ -149,7 +150,7 @@ pub enum ProcX {
     Write(MutReference, Term, Proc),
     Read(MutReference, Var, Proc),
     Ite(Term, Proc, Proc),
-    Call(ProcName, Vec<Term>),
+    Call(ProcName, Vector<Term>),
     Par(Proc, Proc),
 }
 
@@ -164,7 +165,7 @@ pub type PermDecl = RcSpanned<PermDeclX>;
 #[derive(Debug)]
 pub struct PermDeclX {
     pub name: PermVar,
-    pub param_typs: Vec<BaseType>,
+    pub param_typs: Vector<BaseType>,
 }
 
 pub type MutDecl = RcSpanned<MutDeclX>;
@@ -182,8 +183,9 @@ pub struct ChanDeclX {
     pub perm: Permission,
 }
 
+pub type ProcParam = RcSpanned<ProcParamX>;
 #[derive(Clone, Debug)]
-pub struct ProcParam {
+pub struct ProcParamX {
     pub name: Var,
     pub typ: TermType,
 }
@@ -200,14 +202,15 @@ pub type ProcDecl = RcSpanned<ProcDeclX>;
 #[derive(Debug)]
 pub struct ProcDeclX {
     pub name: ProcName,
-    pub params: Vec<ProcParam>,
-    pub res: Vec<ProcResource>,
+    pub params: Vector<ProcParam>,
+    pub res: Vector<ProcResource>,
     pub all_res: bool,
     pub body: Proc,
 }
 
+pub type Decl = Rc<DeclX>;
 #[derive(Debug)]
-pub enum Decl {
+pub enum DeclX {
     Const(ConstDecl),
     Perm(PermDecl),
     Mut(MutDecl),
@@ -217,7 +220,7 @@ pub enum Decl {
 
 pub type Program = Rc<ProgramX>;
 pub struct ProgramX {
-    pub decls: Vec<Decl>,
+    pub decls: Vector<Decl>,
 }
 
 #[derive(Debug)]
@@ -227,6 +230,15 @@ pub struct Ctx {
     pub muts: IndexMap<MutName, MutDecl>,
     pub chans: IndexMap<ChanName, ChanDecl>,
     pub procs: IndexMap<ProcName, ProcDecl>,
+}
+
+impl ProcParamX {
+    pub fn new(name: impl Into<Var>, typ: impl Borrow<TermType>) -> ProcParam {
+        Spanned::new(ProcParamX {
+            name: name.into(),
+            typ: typ.borrow().clone(),
+        })
+    }
 }
 
 impl ProcResourceX {
@@ -240,6 +252,68 @@ impl ProcResourceX {
 
     pub fn perm(perm: impl Borrow<Permission>) -> ProcResource {
         Spanned::new(ProcResourceX::Perm(perm.borrow().clone()))
+    }
+}
+
+impl PermDeclX {
+    pub fn new(name: impl Into<PermVar>, typs: impl IntoIterator<Item = BaseType>) -> PermDecl {
+        Spanned::new(PermDeclX {
+            name: name.into(),
+            param_typs: typs.into_iter().collect(),
+        })
+    }
+}
+
+impl ProcDeclX {
+    pub fn new(
+        name: impl Into<ProcName>,
+        params: impl IntoIterator<Item = impl Borrow<ProcParam>>,
+        res: impl IntoIterator<Item = impl Borrow<ProcResource>>,
+        body: impl Borrow<Proc>,
+    ) -> ProcDecl {
+        Spanned::new(ProcDeclX {
+            name: name.into(),
+            params: params.into_iter().map(|p| p.borrow().clone()).collect(),
+            res: res.into_iter().map(|r| r.borrow().clone()).collect(),
+            all_res: false,
+            body: body.borrow().clone(),
+        })
+    }
+
+    pub fn new_all_res(
+        name: impl Into<ProcName>,
+        params: impl IntoIterator<Item = impl Borrow<ProcParam>>,
+        body: impl Borrow<Proc>,
+    ) -> ProcDecl {
+        Spanned::new(ProcDeclX {
+            name: name.into(),
+            params: params.into_iter().map(|p| p.borrow().clone()).collect(),
+            res: vector![],
+            all_res: true,
+            body: body.borrow().clone(),
+        })
+    }
+}
+
+impl DeclX {
+    pub fn new_const(decl: impl Borrow<ConstDecl>) -> Decl {
+        Rc::new(DeclX::Const(decl.borrow().clone()))
+    }
+
+    pub fn new_perm(decl: impl Borrow<PermDecl>) -> Decl {
+        Rc::new(DeclX::Perm(decl.borrow().clone()))
+    }
+
+    pub fn new_mut(decl: impl Borrow<MutDecl>) -> Decl {
+        Rc::new(DeclX::Mut(decl.borrow().clone()))
+    }
+
+    pub fn new_chan(decl: impl Borrow<ChanDecl>) -> Decl {
+        Rc::new(DeclX::Chan(decl.borrow().clone()))
+    }
+
+    pub fn new_proc(decl: impl Borrow<ProcDecl>) -> Decl {
+        Rc::new(DeclX::Proc(decl.borrow().clone()))
     }
 }
 
@@ -280,7 +354,10 @@ impl Ctx {
 
     pub fn add_perm(&mut self, decl: &PermDecl) -> Result<(), String> {
         if self.perms.contains_key(&decl.name) {
-            Err(format!("duplicate permission variable declaration {}", decl.name))?;
+            Err(format!(
+                "duplicate permission variable declaration {}",
+                decl.name
+            ))?;
         }
         self.perms.insert(decl.name.clone(), decl.clone());
         Ok(())
@@ -289,7 +366,10 @@ impl Ctx {
     /// Since the parser will conflate variables and constants
     /// here we construct a substitution map from variables to constants
     pub fn const_substitution(&self) -> IndexMap<Var, Term> {
-        self.consts.keys().map(|c| (c.into(), TermX::var(c))).collect()
+        self.consts
+            .keys()
+            .map(|c| (c.into(), TermX::var(c)))
+            .collect()
     }
 
     pub fn add_chan(&mut self, decl: &ChanDecl) -> Result<(), String> {
@@ -314,32 +394,29 @@ impl Ctx {
     }
 
     /// Get all possible resources in the current context
-    pub fn get_all_res(&self, span: &Option<Span>) -> Vec<ProcResource> {
-        let mut res = Vec::new();
+    pub fn get_all_res(&self, span: &Option<Span>) -> Vector<ProcResource> {
+        let mut res = Vector::new();
 
         for mut_name in self.muts.keys() {
             // Add write permission to mut_name
-            res.push(Spanned::spanned_option(
+            res.push_back(Spanned::spanned_option(
                 span,
                 ProcResourceX::Perm(Spanned::spanned_option(
                     span,
                     PermissionX::Fraction(
                         PermFraction::Write(0),
-                        Spanned::spanned_option(
-                            span,
-                            MutReferenceX::Base(mut_name.clone()),
-                        ),
+                        Spanned::spanned_option(span, MutReferenceX::Base(mut_name.clone())),
                     ),
                 )),
             ));
         }
 
         for chan_name in self.chans.keys() {
-            res.push(Spanned::spanned_option(
+            res.push_back(Spanned::spanned_option(
                 span,
                 ProcResourceX::Input(chan_name.clone()),
             ));
-            res.push(Spanned::spanned_option(
+            res.push_back(Spanned::spanned_option(
                 span,
                 ProcResourceX::Output(chan_name.clone()),
             ));
@@ -361,14 +438,16 @@ impl Ctx {
             self.get_all_res(&decl.span)
         } else {
             // Substitute variables => constants
-            decl.res.iter().map(|r|
-                match &r.x {
+            decl.res
+                .iter()
+                .map(|r| match &r.x {
                     ProcResourceX::Perm(p) => Spanned::spanned_option(
                         &r.span,
                         ProcResourceX::Perm(PermissionX::substitute(p, &subst)),
                     ),
                     _ => r.clone(),
-                }).collect()
+                })
+                .collect()
         };
 
         // Shadow process's paramters in the variables => constants substitution
@@ -405,18 +484,18 @@ impl Ctx {
 
         // Collect all constants, mutables, and permission variables first
         for decl in &prog.decls {
-            match decl {
-                Decl::Const(decl) => ctx.add_const(decl)?,
-                Decl::Mut(decl) => ctx.add_mut(decl)?,
-                Decl::Perm(decl) => ctx.add_perm(decl)?,
+            match decl.as_ref() {
+                DeclX::Const(decl) => ctx.add_const(decl)?,
+                DeclX::Mut(decl) => ctx.add_mut(decl)?,
+                DeclX::Perm(decl) => ctx.add_perm(decl)?,
                 _ => {}
             }
         }
 
         // Collect channel declarations converting some Var to Const
         for decl in &prog.decls {
-            match decl {
-                Decl::Chan(decl) => ctx.add_chan(decl)?,
+            match decl.as_ref() {
+                DeclX::Chan(decl) => ctx.add_chan(decl)?,
                 _ => {}
             }
         }
@@ -426,8 +505,8 @@ impl Ctx {
         // This needs to happen after add_chan's since the `all` resource
         // notation requires knowing all channels in the context
         for decl in &prog.decls {
-            match decl {
-                Decl::Proc(decl) => ctx.add_proc(decl)?,
+            match decl.as_ref() {
+                DeclX::Proc(decl) => ctx.add_proc(decl)?,
                 _ => {}
             }
         }
@@ -456,11 +535,17 @@ impl MutReferenceTypeX {
         Rc::new(MutReferenceTypeX::Base(name.into()))
     }
 
-    pub fn index(base: impl Borrow<MutReferenceType>, index: MutReferenceIndex) -> MutReferenceType {
+    pub fn index(
+        base: impl Borrow<MutReferenceType>,
+        index: MutReferenceIndex,
+    ) -> MutReferenceType {
         Rc::new(MutReferenceTypeX::Index(base.borrow().clone(), index))
     }
 
-    pub fn offset(base: impl Borrow<MutReferenceType>, offset: MutReferenceIndex) -> MutReferenceType {
+    pub fn offset(
+        base: impl Borrow<MutReferenceType>,
+        offset: MutReferenceIndex,
+    ) -> MutReferenceType {
         Rc::new(MutReferenceTypeX::Offset(base.borrow().clone(), offset))
     }
 }
@@ -525,66 +610,62 @@ impl TermTypeX {
         Rc::new(TermTypeX::Base(BaseType::Bool))
     }
 
-    pub fn mut_ref(ref_types: impl IntoIterator<Item=impl Borrow<MutReferenceType>>) -> TermType {
-        Rc::new(TermTypeX::Ref(ref_types.into_iter().map(|r| r.borrow().clone()).collect()))
+    pub fn mut_ref(ref_types: impl IntoIterator<Item = impl Borrow<MutReferenceType>>) -> TermType {
+        Rc::new(TermTypeX::Ref(
+            ref_types.into_iter().map(|r| r.borrow().clone()).collect(),
+        ))
     }
 }
 
 macro_rules! substitute_inplace {
     // Unary constructs
-    ($term:expr, $op:expr, $k:ident, $t:expr, $subst:expr) => {
-        {
-            let t_subst = $k::substitute_inplace($t, $subst);
-            if t_subst.is_some() {
-                Some(Spanned::spanned_option(
-                    &$term.borrow().span,
-                    $op(t_subst.unwrap()),
-                ))
-            } else {
-                None
-            }
+    ($term:expr, $op:expr, $k:ident, $t:expr, $subst:expr) => {{
+        let t_subst = $k::substitute_inplace($t, $subst);
+        if t_subst.is_some() {
+            Some(Spanned::spanned_option(
+                &$term.borrow().span,
+                $op(t_subst.unwrap()),
+            ))
+        } else {
+            None
         }
-    };
+    }};
 
     // Binary constructs
-    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $subst:expr) => {
-        {
-            let t1_subst = $k1::substitute_inplace($t1, $subst);
-            let t2_subst = $k2::substitute_inplace($t2, $subst);
-            if t1_subst.is_some() || t2_subst.is_some() {
-                Some(Spanned::spanned_option(
-                    &$term.borrow().span,
-                    $op(
-                        t1_subst.unwrap_or($t1.clone()),
-                        t2_subst.unwrap_or($t2.clone()),
-                    ),
-                ))
-            } else {
-                None
-            }
+    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $subst:expr) => {{
+        let t1_subst = $k1::substitute_inplace($t1, $subst);
+        let t2_subst = $k2::substitute_inplace($t2, $subst);
+        if t1_subst.is_some() || t2_subst.is_some() {
+            Some(Spanned::spanned_option(
+                &$term.borrow().span,
+                $op(
+                    t1_subst.unwrap_or($t1.clone()),
+                    t2_subst.unwrap_or($t2.clone()),
+                ),
+            ))
+        } else {
+            None
         }
-    };
+    }};
 
     // Ternary constructs
-    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $k3:ident, $t3:expr, $subst:expr) => {
-        {
-            let t1_subst = $k1::substitute_inplace($t1, $subst);
-            let t2_subst = $k2::substitute_inplace($t2, $subst);
-            let t3_subst = $k3::substitute_inplace($t3, $subst);
-            if t1_subst.is_some() || t2_subst.is_some() || t3_subst.is_some() {
-                Some(Spanned::spanned_option(
-                    &$term.borrow().span,
-                    $op(
-                        t1_subst.unwrap_or($t1.clone()),
-                        t2_subst.unwrap_or($t2.clone()),
-                        t3_subst.unwrap_or($t3.clone()),
-                    ),
-                ))
-            } else {
-                None
-            }
+    ($term:expr, $op:expr, $k1:ident, $t1:expr, $k2:ident, $t2:expr, $k3:ident, $t3:expr, $subst:expr) => {{
+        let t1_subst = $k1::substitute_inplace($t1, $subst);
+        let t2_subst = $k2::substitute_inplace($t2, $subst);
+        let t3_subst = $k3::substitute_inplace($t3, $subst);
+        if t1_subst.is_some() || t2_subst.is_some() || t3_subst.is_some() {
+            Some(Spanned::spanned_option(
+                &$term.borrow().span,
+                $op(
+                    t1_subst.unwrap_or($t1.clone()),
+                    t2_subst.unwrap_or($t2.clone()),
+                    t3_subst.unwrap_or($t3.clone()),
+                ),
+            ))
+        } else {
+            None
         }
-    };
+    }};
 }
 
 impl TermX {
@@ -649,16 +730,36 @@ impl TermX {
             TermX::Int(..) => None,
             TermX::BitVec(..) => None,
             TermX::Ref(m) => substitute_inplace!(term, TermX::Ref, MutReferenceX, m, subst),
-            TermX::Add(t1, t2) => substitute_inplace!(term, TermX::Add, TermX, t1, TermX, t2, subst),
-            TermX::BVAdd(t1, t2) => substitute_inplace!(term, TermX::BVAdd, TermX, t1, TermX, t2, subst),
-            TermX::Mul(t1, t2) => substitute_inplace!(term, TermX::Mul, TermX, t1, TermX, t2, subst),
-            TermX::BVMul(t1, t2) => substitute_inplace!(term, TermX::BVMul, TermX, t1, TermX, t2, subst),
-            TermX::And(t1, t2) => substitute_inplace!(term, TermX::And, TermX, t1, TermX, t2, subst),
-            TermX::Less(t1, t2) => substitute_inplace!(term, TermX::Less, TermX, t1, TermX, t2, subst),
-            TermX::BVULT(t1, t2) => substitute_inplace!(term, TermX::BVULT, TermX, t1, TermX, t2, subst),
-            TermX::BVSLT(t1, t2) => substitute_inplace!(term, TermX::BVSLT, TermX, t1, TermX, t2, subst),
-            TermX::BVSGT(t1, t2) => substitute_inplace!(term, TermX::BVSGT, TermX, t1, TermX, t2, subst),
-            TermX::Equal(t1, t2) => substitute_inplace!(term, TermX::Equal, TermX, t1, TermX, t2, subst),
+            TermX::Add(t1, t2) => {
+                substitute_inplace!(term, TermX::Add, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVAdd(t1, t2) => {
+                substitute_inplace!(term, TermX::BVAdd, TermX, t1, TermX, t2, subst)
+            }
+            TermX::Mul(t1, t2) => {
+                substitute_inplace!(term, TermX::Mul, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVMul(t1, t2) => {
+                substitute_inplace!(term, TermX::BVMul, TermX, t1, TermX, t2, subst)
+            }
+            TermX::And(t1, t2) => {
+                substitute_inplace!(term, TermX::And, TermX, t1, TermX, t2, subst)
+            }
+            TermX::Less(t1, t2) => {
+                substitute_inplace!(term, TermX::Less, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVULT(t1, t2) => {
+                substitute_inplace!(term, TermX::BVULT, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVSLT(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSLT, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVSGT(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSGT, TermX, t1, TermX, t2, subst)
+            }
+            TermX::Equal(t1, t2) => {
+                substitute_inplace!(term, TermX::Equal, TermX, t1, TermX, t2, subst)
+            }
             TermX::Not(t) => substitute_inplace!(term, TermX::Not, TermX, t, subst),
         }
     }
@@ -760,9 +861,12 @@ impl MutTypeX {
     pub fn base(base: impl Borrow<BaseType>) -> MutType {
         Rc::new(MutTypeX::Base(base.borrow().clone()))
     }
-    
+
     pub fn array(index: impl Borrow<BaseType>, base: impl Borrow<MutType>) -> MutType {
-        Rc::new(MutTypeX::Array(index.borrow().clone(), base.borrow().clone()))
+        Rc::new(MutTypeX::Array(
+            index.borrow().clone(),
+            base.borrow().clone(),
+        ))
     }
 
     pub fn get_dimensions(&self) -> usize {
@@ -787,7 +891,11 @@ impl MutReferenceX {
     }
 
     pub fn slice(m: impl Borrow<MutReference>, i: Option<&Term>, j: Option<&Term>) -> MutReference {
-        Spanned::new(MutReferenceX::Slice(m.borrow().clone(), i.map(|i| i.clone()), j.map(|j| j.clone())))
+        Spanned::new(MutReferenceX::Slice(
+            m.borrow().clone(),
+            i.map(|i| i.clone()),
+            j.map(|j| j.clone()),
+        ))
     }
 
     /// Check if the mutable reference has a deref or not
@@ -839,8 +947,18 @@ impl MutReferenceX {
     ) -> Option<MutReference> {
         match &mut_ref.borrow().x {
             MutReferenceX::Base(..) => None,
-            MutReferenceX::Deref(t) => substitute_inplace!(mut_ref, MutReferenceX::Deref, TermX, t, subst),
-            MutReferenceX::Index(m, t) => substitute_inplace!(mut_ref, MutReferenceX::Index, MutReferenceX, m, TermX, t, subst),
+            MutReferenceX::Deref(t) => {
+                substitute_inplace!(mut_ref, MutReferenceX::Deref, TermX, t, subst)
+            }
+            MutReferenceX::Index(m, t) => substitute_inplace!(
+                mut_ref,
+                MutReferenceX::Index,
+                MutReferenceX,
+                m,
+                TermX,
+                t,
+                subst
+            ),
             MutReferenceX::Slice(m, t1, t2) => {
                 let m_subst = Self::substitute_inplace(m, subst);
                 let t1_subst = t1
@@ -930,7 +1048,7 @@ impl ProcX {
             args.into_iter().map(|t| t.borrow().clone()).collect(),
         ))
     }
-    
+
     /// Returns None if unchanged
     // TODO: this functinon currently assumes no capturing of variables
     fn substitute_inplace(
@@ -1076,8 +1194,14 @@ impl PermissionX {
         Spanned::new(PermissionX::Empty)
     }
 
-    pub fn var(var: impl Into<PermVar>, terms: impl IntoIterator<Item=impl Borrow<Term>>) -> Permission {
-        Spanned::new(PermissionX::Var(var.into(), terms.into_iter().map(|t| t.borrow().clone()).collect()))
+    pub fn var(
+        var: impl Into<PermVar>,
+        terms: impl IntoIterator<Item = impl Borrow<Term>>,
+    ) -> Permission {
+        Spanned::new(PermissionX::Var(
+            var.into(),
+            terms.into_iter().map(|t| t.borrow().clone()).collect(),
+        ))
     }
 
     pub fn add(p1: impl Borrow<Permission>, p2: impl Borrow<Permission>) -> Permission {
@@ -1105,9 +1229,35 @@ impl PermissionX {
     ) -> Option<Permission> {
         match &perm.borrow().x {
             PermissionX::Empty => None,
-            PermissionX::Add(p1, p2) => substitute_inplace!(perm, PermissionX::Add, PermissionX, p1, PermissionX, p2, subst),
-            PermissionX::Sub(p1, p2) => substitute_inplace!(perm, PermissionX::Sub, PermissionX, p1, PermissionX, p2, subst),
-            PermissionX::Ite(t, p1, p2) => substitute_inplace!(perm, PermissionX::Ite, TermX, t, PermissionX, p1, PermissionX, p2, subst),
+            PermissionX::Add(p1, p2) => substitute_inplace!(
+                perm,
+                PermissionX::Add,
+                PermissionX,
+                p1,
+                PermissionX,
+                p2,
+                subst
+            ),
+            PermissionX::Sub(p1, p2) => substitute_inplace!(
+                perm,
+                PermissionX::Sub,
+                PermissionX,
+                p1,
+                PermissionX,
+                p2,
+                subst
+            ),
+            PermissionX::Ite(t, p1, p2) => substitute_inplace!(
+                perm,
+                PermissionX::Ite,
+                TermX,
+                t,
+                PermissionX,
+                p1,
+                PermissionX,
+                p2,
+                subst
+            ),
             PermissionX::Fraction(frac, mut_ref) => {
                 let mut_ref_subst = MutReferenceX::substitute_inplace(mut_ref, subst);
                 if mut_ref_subst.is_some() {
@@ -1120,16 +1270,16 @@ impl PermissionX {
                 }
             }
             PermissionX::Var(v, terms) => {
-                let mut terms_subst = Vec::new();
+                let mut terms_subst = Vector::new();
                 let mut modified = false;
 
                 for term in terms {
                     let term_subst = TermX::substitute_inplace(term, subst);
                     if let Some(term_subst) = term_subst {
                         modified = true;
-                        terms_subst.push(term_subst);
+                        terms_subst.push_back(term_subst);
                     } else {
-                        terms_subst.push(term.clone());
+                        terms_subst.push_back(term.clone());
                     }
                 }
 
@@ -1200,7 +1350,7 @@ impl fmt::Display for BaseType {
         match self {
             BaseType::Bool => write!(f, "bool"),
             BaseType::Int => write!(f, "int"),
-            BaseType::BitVec(width) => write!(f, "bv{}", width)
+            BaseType::BitVec(width) => write!(f, "bv{}", width),
         }
     }
 }
@@ -1524,7 +1674,7 @@ impl fmt::Display for ChanDeclX {
     }
 }
 
-impl fmt::Display for ProcParam {
+impl fmt::Display for ProcParamX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}: {}", self.name, self.typ)
     }
@@ -1593,14 +1743,14 @@ impl fmt::Display for ProcDeclX {
     }
 }
 
-impl fmt::Display for Decl {
+impl fmt::Display for DeclX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Decl::Const(decl) => write!(f, "{}", decl),
-            Decl::Perm(decl) => write!(f, "{}", decl),
-            Decl::Mut(decl) => write!(f, "{}", decl),
-            Decl::Chan(decl) => write!(f, "{}", decl),
-            Decl::Proc(decl) => write!(f, "{}", decl),
+            DeclX::Const(decl) => write!(f, "{}", decl),
+            DeclX::Perm(decl) => write!(f, "{}", decl),
+            DeclX::Mut(decl) => write!(f, "{}", decl),
+            DeclX::Chan(decl) => write!(f, "{}", decl),
+            DeclX::Proc(decl) => write!(f, "{}", decl),
         }
     }
 }

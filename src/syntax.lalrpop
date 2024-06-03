@@ -1,6 +1,8 @@
 use std::str::FromStr;
 use std::rc::Rc;
 
+use im::{Vector, vector};
+
 use crate::ast::*;
 use crate::span::*;
 
@@ -61,8 +63,8 @@ BaseType: BaseType = {
 
 TermType: TermType = {
     BaseType => Rc::new(TermTypeX::Base(<>)),
-    "&" <t:MutReferenceType> => Rc::new(TermTypeX::Ref(vec![t])),
-    "&" "{" <ts:CommaSep<MutReferenceType>> "}" => Rc::new(TermTypeX::Ref(ts)),
+    "&" <t:MutReferenceType> => Rc::new(TermTypeX::Ref(vector![t])),
+    "&" "{" <ts:CommaSep<MutReferenceType>> "}" => Rc::new(TermTypeX::Ref(ts.into())),
 }
 
 MutType: MutType = {
@@ -72,7 +74,7 @@ MutType: MutType = {
 }
 
 ProcParam: ProcParam = {
-    <v:Var> ":" <t:TermType> => ProcParam { name: v, typ: t },
+    <start:@L> <v:Var> ":" <t:TermType> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcParamX { name: v, typ: t }),
 }
 
 PermFraction: PermFraction = {
@@ -103,7 +105,7 @@ MutReference: MutReference = {
 PermissionReset = <Permission>;
 Permission: Permission = {
     #[precedence(level = "0")]
-    <start:@L> <v:PermVar> "(" <ts:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Var(v, ts)),
+    <start:@L> <v:PermVar> "(" <ts:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Var(v, ts.into())),
     <start:@L> "empty" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Empty),
     <start:@L> <f:PermFraction> <r:MutReference> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Fraction(f, r)),
     <start:@L> "if" <t:Term> "then" <p1:Permission> "else" <p2:Permission> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, PermissionX::Ite(t, p1, p2)),
@@ -168,7 +170,7 @@ Proc: Proc = {
 
     <start:@L> "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k1, k2)),
     <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Skip))),
-    <start:@L> <p:ProcName> "(" <args:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Call(p, args)),
+    <start:@L> <p:ProcName> "(" <args:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Call(p, args.into())),
 
     "(" <p:ProcReset> ")" => p,
 
@@ -184,19 +186,19 @@ ProcResource: ProcResource = {
 }
 
 Decl: Decl = {
-    <start:@L> "const" <n:Const> ":" <t:BaseType> <end:@R> => Decl::Const(Spanned::spanned(path.clone(), src.clone(), start, end, ConstDeclX { name: n, typ: t })),
-    <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => Decl::Perm(Spanned::spanned(path.clone(), src.clone(), start, end, PermDeclX { name: v, param_typs: p })),
-    <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => Decl::Mut(Spanned::spanned(path.clone(), src.clone(), start, end, MutDeclX { name: n, typ: t })),
+    <start:@L> "const" <n:Const> ":" <t:BaseType> <end:@R> => DeclX::new_const(Spanned::spanned(path.clone(), src.clone(), start, end, ConstDeclX { name: n, typ: t })),
+    <start:@L> "perm" <v:PermVar> "(" <p:CommaSep<BaseType>> ")" <end:@R> => DeclX::new_perm(Spanned::spanned(path.clone(), src.clone(), start, end, PermDeclX { name: v, param_typs: p.into() })),
+    <start:@L> "mut" <n:MutName> ":" <t:MutType> <end:@R> => DeclX::new_mut(Spanned::spanned(path.clone(), src.clone(), start, end, MutDeclX { name: n, typ: t })),
     <start:@L> "chan" <n:ChanName> ":" <t:TermType> "|" <p:Permission> <end:@R> =>
-        Decl::Chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: p })),
+        DeclX::new_chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: p })),
     <start:@L> "chan" <n:ChanName> ":" <t:TermType> <end:@R> =>
-        Decl::Chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: Spanned::spanned(path.clone(), src.clone(), end, end, PermissionX::Empty) })),
+        DeclX::new_chan(Spanned::spanned(path.clone(), src.clone(), start, end, ChanDeclX { name: n, typ: t, perm: Spanned::spanned(path.clone(), src.clone(), end, end, PermissionX::Empty) })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" "|" <r:CommaSep<ProcResource>> <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: r, all_res: false, body: b })),
+        DeclX::new_proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p.into(), res: r.into(), all_res: false, body: b })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: false, body: b })),
+        DeclX::new_proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p.into(), res: Vector::new(), all_res: false, body: b })),
     <start:@L> "proc" <n:ProcName> "(" <p:CommaSep<ProcParam>> ")" "|" "all" <end:@R> "=" <b:Proc> =>
-        Decl::Proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p, res: Vec::new(), all_res: true, body: b })),
+        DeclX::new_proc(Spanned::spanned(path.clone(), src.clone(), start, end, ProcDeclX { name: n, params: p.into(), res: Vector::new(), all_res: true, body: b })),
 }
 
-pub Program: Program = { Decl* => Rc::new(ProgramX { decls: <> }) }
+pub Program: Program = { Decl* => Rc::new(ProgramX { decls: <>.into() }) }

@@ -27,10 +27,10 @@ impl Span {
         if offset > src.len() {
             return None;
         }
-    
+
         let mut line = 1;
         let mut col = 1;
-    
+
         for (idx, ch) in src.char_indices() {
             if idx == offset {
                 return Some((line, col));
@@ -42,7 +42,7 @@ impl Span {
                 col += 1;
             }
         }
-    
+
         if offset == src.len() {
             Some((line, col))
         } else {
@@ -66,13 +66,21 @@ impl<X> Spanned<X> {
 
     pub fn spanned(path: FilePath, source: Source, start: usize, end: usize, x: X) -> RcSpanned<X> {
         Rc::new(Spanned {
-            span: Some(Span { path, source, start, end }),
+            span: Some(Span {
+                path,
+                source,
+                start,
+                end,
+            }),
             x,
         })
     }
 
     pub fn spanned_option(span: &Option<Span>, x: X) -> RcSpanned<X> {
-        Rc::new(Spanned { span: span.as_ref().cloned(), x })
+        Rc::new(Spanned {
+            span: span.as_ref().cloned(),
+            x,
+        })
     }
 }
 
