@@ -337,6 +337,10 @@ impl Ctx {
     }
 
     pub fn add_const(&mut self, decl: &ConstDecl) -> Result<(), String> {
+        if !self.chans.is_empty() || !self.procs.is_empty() {
+            unimplemented!("adding constants after channel or process declarations");
+        }
+
         if self.consts.contains_key(&decl.name) {
             Err(format!("duplicate constant declaration {}", decl.name))?;
         }
@@ -511,6 +515,22 @@ impl Ctx {
             }
         }
         Ok(ctx)
+    }
+}
+
+impl From<&Ctx> for Program {
+    fn from(ctx: &Ctx) -> Self {
+        Rc::new(ProgramX {
+            decls: ctx
+                .consts
+                .values()
+                .map(|d| DeclX::new_const(d))
+                .chain(ctx.muts.values().map(|d| DeclX::new_mut(d)))
+                .chain(ctx.perms.values().map(|d| DeclX::new_perm(d)))
+                .chain(ctx.chans.values().map(|d| DeclX::new_chan(d)))
+                .chain(ctx.procs.values().map(|d| DeclX::new_proc(d)))
+                .collect(),
+        })
     }
 }
 

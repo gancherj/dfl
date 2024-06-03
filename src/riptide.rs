@@ -5,13 +5,12 @@ use im::HashMap;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{BaseType, ConstDeclX, Program};
+use crate::ast::{BaseType, ConstDeclX};
 use crate::span::Spanned;
 use crate::{
-    BitVecWidth, ChanDeclX, ChanName, DeclX, MutDeclX, MutReferenceIndex, MutReferenceTypeX,
+    BitVecWidth, ChanDeclX, ChanName, Ctx, MutDeclX, MutReferenceIndex, MutReferenceTypeX,
     MutReferenceX, MutTypeX, PermDeclX, PermVar, PermissionX, Proc, ProcDeclX, ProcName, ProcParam,
-    ProcParamX, ProcResource, ProcResourceX, ProcX, ProgramX, Term, TermType, TermTypeX, TermX,
-    Var,
+    ProcParamX, ProcResource, ProcResourceX, ProcX, Term, TermType, TermTypeX, TermX, Var,
 };
 
 pub type ChannelId = u32;
@@ -560,6 +559,15 @@ impl Graph {
         res
     }
 
+    fn add_fresh_perm_var(
+        ctx: &mut Ctx,
+        param_typs: impl IntoIterator<Item = BaseType>,
+    ) -> Result<PermVar, String> {
+        let perm_var: PermVar = format!("p{}", ctx.perms.len()).into();
+        ctx.add_perm(&PermDeclX::new(&perm_var, param_typs))?;
+        Ok(perm_var)
+    }
+
     fn infer_channel_types_from_constants(
         &self,
         opts: &TranslationOptions,
@@ -735,16 +743,17 @@ impl Graph {
         Ok(changed)
     }
 
-    pub fn to_program(&self, opts: &TranslationOptions) -> Result<Program, String> {
-        let mut consts = Vec::new();
-        let mut muts = Vec::new();
-        let mut perms = Vec::new();
-        let mut chans = Vec::new();
-        let mut procs = Vec::new();
-
+    /// Generate RipTide function arguments as mutables and constants
+    fn gen_function_arguments(
+        &self,
+        opts: &TranslationOptions,
+        ctx: &mut Ctx,
+    ) -> Result<(), String> {
         let mut has_alias = false;
 
-        // Generate function arguments
+        // i32 => constants
+        // restrict i32* => mutables
+        // alias i32* => merged into one mutable
         for param in self.params.values() {
             match param.typ.borrow() {
                 ParamTypeX::Int(width) => {
@@ -754,21 +763,21 @@ impl Graph {
                             param.name, width, opts.word_width
                         ));
                     }
-                    consts.push(Spanned::new(ConstDeclX {
+                    ctx.add_const(&Spanned::new(ConstDeclX {
                         name: Self::param_name(param).into(),
                         typ: BaseType::BitVec(*width),
-                    }));
+                    }))?;
                 }
                 ParamTypeX::Pointer(base) => match base.borrow() {
                     ParamTypeX::Int(width) => {
                         if !param.alias {
-                            muts.push(Spanned::new(MutDeclX {
+                            ctx.add_mut(&Spanned::new(MutDeclX {
                                 name: Self::param_name(param).into(),
                                 typ: MutTypeX::array(
                                     BaseType::BitVec(opts.word_width),
                                     MutTypeX::base(BaseType::BitVec(*width)),
                                 ),
-                            }));
+                            }))?;
                         } else {
                             if *width != opts.word_width {
                                 return Err(format!("parameter `{}` points to a different width {} from the word width {}", param.name, width, opts.word_width));
@@ -776,10 +785,10 @@ impl Graph {
                             has_alias = true;
 
                             // Add a constant pointer into the memory
-                            consts.push(Spanned::new(ConstDeclX {
+                            ctx.add_const(&Spanned::new(ConstDeclX {
                                 name: Self::param_name(param).into(),
                                 typ: BaseType::BitVec(opts.word_width),
-                            }));
+                            }))?;
                         }
                     }
                     ParamTypeX::Pointer(..) => unimplemented!("nested pointer"),
@@ -790,15 +799,19 @@ impl Graph {
         // All pointers that could be aliasing are put into
         // a "mem: [[bv32]]" mutable
         if has_alias {
-            muts.push(Spanned::new(MutDeclX {
+            ctx.add_mut(&Spanned::new(MutDeclX {
                 name: "mem".into(),
                 typ: MutTypeX::array(
                     BaseType::BitVec(opts.word_width),
                     MutTypeX::base(BaseType::BitVec(opts.word_width)),
                 ),
-            }));
+            }))?;
         }
 
+        Ok(())
+    }
+
+    fn gen_channels(&self, opts: &TranslationOptions, ctx: &mut Ctx) -> Result<(), String> {
         let mut chan_types = IndexMap::new();
 
         // Infer types of constant channels
@@ -815,18 +828,17 @@ impl Graph {
 
             let chan_type = &chan_types[&chan.id()];
 
-            let perm_var: PermVar = format!("p{}", perms.len()).into();
-            perms.push(PermDeclX::new(
-                &perm_var,
+            let perm_var = Self::add_fresh_perm_var(
+                ctx,
                 match chan_type.borrow() {
                     TermTypeX::Base(b @ BaseType::BitVec(..)) => vec![b.clone()],
                     _ => vec![],
                 },
-            ));
+            )?;
 
             // chan c<id>: <type> | p(c<id>) (if type is bv)
             // chan c<id>: <type> | p() (otherwise)
-            chans.push(Spanned::new(ChanDeclX {
+            ctx.add_chan(&Spanned::new(ChanDeclX {
                 name: Self::channel_name(chan),
                 typ: chan_type.clone(),
                 perm: PermissionX::var(
@@ -838,8 +850,391 @@ impl Graph {
                         _ => vec![],
                     },
                 ),
-            }))
+            }))?;
         }
+
+        Ok(())
+    }
+
+    /// Generate an entry process (and potentially some auxiliary processes)
+    /// for the given operator, and return the entry process name
+    pub fn gen_operator(
+        &self,
+        op: &Operator,
+        opts: &TranslationOptions,
+        ctx: &mut Ctx,
+    ) -> Result<ProcName, String> {
+        let name = Self::proc_name(op);
+        let perm_var = Self::add_fresh_perm_var(ctx, [])?;
+
+        let mut res = vec![ProcResourceX::perm(PermissionX::var(
+            &perm_var,
+            [] as [Term; 0],
+        ))];
+        res.extend(Self::gen_io_resources(op));
+
+        match op.kind {
+            OperatorKind::Id => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    send TermX::var("a") => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Add => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvadd(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Mul => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvmul(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::ULT => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvult(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::SLT => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvslt(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::SGT => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvsgt(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::Eq => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::eq(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::Select => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv d <= port 0;
+                    recv a <= port 1;
+                    recv b <= port 2;
+                    if (TermX::not(TermX::eq(
+                        TermX::var("d"),
+                        TermX::bit_vec(0, opts.word_width),
+                    ))) {
+                        send TermX::var("a") => port 0;
+                        call name;
+                    } else {
+                        send TermX::var("b") => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::GEP => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv r <= port 0;
+                    recv i <= port 1;
+                    // *r[i..]
+                    send TermX::reference(MutReferenceX::slice(
+                        MutReferenceX::deref(TermX::var("r")),
+                        Some(&TermX::var("i")),
+                        None,
+                    )) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Ld => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv r <= port 0;
+                    recv i <= port 1;
+                    read x <= MutReferenceX::index(
+                        MutReferenceX::deref(TermX::var("r")),
+                        TermX::var("i"),
+                    );
+                    send TermX::var("x") => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::LdSync => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv r <= port 0;
+                    recv i <= port 1;
+                    recv s <= port 2;
+                    read x <= MutReferenceX::index(
+                        MutReferenceX::deref(TermX::var("r")),
+                        TermX::var("i"),
+                    );
+                    send TermX::var("x") => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::St => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv r <= port 0;
+                    recv i <= port 1;
+                    recv x <= port 2;
+                    write TermX::var("x") => MutReferenceX::index(
+                        MutReferenceX::deref(TermX::var("r")),
+                        TermX::var("i"),
+                    );
+                    send TermX::bit_vec(0, opts.word_width) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::StSync => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv r <= port 0;
+                    recv i <= port 1;
+                    recv x <= port 2;
+                    recv s <= port 3;
+                    write TermX::var("x") => MutReferenceX::index(
+                        MutReferenceX::deref(TermX::var("r")),
+                        TermX::var("i"),
+                    );
+                    send TermX::bit_vec(0, opts.word_width) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Steer(pred) => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv d <= port 0;
+                    recv x <= port 1;
+                    if (if pred {
+                        TermX::not(TermX::eq(
+                            TermX::var("d"),
+                            TermX::bit_vec(0, opts.word_width),
+                        ))
+                    } else {
+                        TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                    }) {
+                        send TermX::var("x") => port 0;
+                        call name;
+                    } else {
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::Inv(pred) => {
+                let state1: ProcName = name.clone();
+                let state2: ProcName = format!("{}Loop", name).into();
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state1; res =>
+                        recv a <= port 1;
+                        send TermX::var("a") => port 0;
+                        call state1;
+                })?;
+
+                // Generate a new permission var for the second state
+                let inv_type = ctx.chans[&Self::channel_name(&op.inputs[1])].typ.clone();
+
+                let perm_var: PermVar = match inv_type.as_ref() {
+                    TermTypeX::Base(base) => Self::add_fresh_perm_var(ctx, [base.clone()])?,
+                    TermTypeX::Ref(..) =>
+                    // TODO: reference dependency not supported
+                    {
+                        Self::add_fresh_perm_var(ctx, [])?
+                    }
+                };
+
+                let mut res = vec![
+                    // p(inv_value)
+                    ProcResourceX::perm(PermissionX::var(&perm_var, [TermX::var("a")])),
+                ];
+                res.extend(Self::gen_io_resources(op));
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state2, ProcParamX::new("a", inv_type); res =>
+                        recv d <= port 0;
+                        if (if pred {
+                            TermX::not(TermX::eq(
+                                TermX::var("d"),
+                                TermX::bit_vec(0, opts.word_width),
+                            ))
+                        } else {
+                            TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                        }) {
+                            send TermX::var("a") => port 0;
+                            call state2, TermX::var("a");
+                        } else {
+                            call state1;
+                        }
+                })?;
+            }
+
+            OperatorKind::Stream(pred) => {
+                let state1: ProcName = name.clone();
+                let state2: ProcName = format!("{}Loop", name).into();
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state1; res =>
+                        recv start <= port 0;
+                        recv bound <= port 1;
+                        recv step <= port 2;
+                        call state2, TermX::var("start"), TermX::var("bound"), TermX::var("step");
+                })?;
+
+                // Generate a new permission var for the second state
+                let perm_var = Self::add_fresh_perm_var(
+                    ctx,
+                    [
+                        BaseType::BitVec(opts.word_width),
+                        BaseType::BitVec(opts.word_width),
+                        BaseType::BitVec(opts.word_width),
+                    ],
+                )?;
+
+                let mut res = vec![
+                    // p(start, bound, step)
+                    ProcResourceX::perm(PermissionX::var(
+                        &perm_var,
+                        [TermX::var("start"), TermX::var("bound"), TermX::var("step")],
+                    )),
+                ];
+                res.extend(Self::gen_io_resources(op));
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state2,
+                        ProcParamX::new("start", TermTypeX::bit_vec(opts.word_width)),
+                        ProcParamX::new("bound", TermTypeX::bit_vec(opts.word_width)),
+                        ProcParamX::new("step", TermTypeX::bit_vec(opts.word_width)); res =>
+                        if (TermX::bvslt(TermX::var("start"), TermX::var("bound"))) {
+                            send TermX::var("start") => port 0;
+                            send TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width) => port 1;
+                            call state2,
+                                TermX::bvadd(TermX::var("start"), TermX::var("step")),
+                                TermX::var("bound"),
+                                TermX::var("step");
+                        } else {
+                            send TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width) => port 1;
+                            call state1;
+                        }
+                })?;
+            }
+
+            OperatorKind::Carry(pred) => {
+                let state1: ProcName = name.clone();
+                let state2: ProcName = format!("{}Loop", name).into();
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state1; res =>
+                        recv a <= port 1;
+                        send TermX::var("a") => port 0;
+                        call state2;
+                })?;
+
+                // Generate a new permission var for the second state
+                let perm_var = Self::add_fresh_perm_var(ctx, [])?;
+
+                let mut res = vec![ProcResourceX::perm(PermissionX::var(
+                    &perm_var,
+                    [] as [Term; 0],
+                ))];
+                res.extend(Self::gen_io_resources(op));
+
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc state2; res =>
+                        recv d <= port 0;
+                        if (if pred {
+                            TermX::not(TermX::eq(
+                                TermX::var("d"),
+                                TermX::bit_vec(0, opts.word_width),
+                            ))
+                        } else {
+                            TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
+                        }) {
+                            recv b <= port 2;
+                            send TermX::var("b") => port 0;
+                            call state2;
+                        } else {
+                            call state1;
+                        }
+                })?;
+            }
+
+            OperatorKind::Merge => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv d <= port 0;
+                    if (TermX::not(TermX::eq(
+                        TermX::var("d"),
+                        TermX::bit_vec(0, opts.word_width),
+                    ))) {
+                        recv a <= port 1;
+                        send TermX::var("a") => port 0;
+                        call name;
+                    } else {
+                        recv b <= port 2;
+                        send TermX::var("b") => port 0;
+                        call name;
+                    }
+            })?,
+        }
+
+        Ok(name)
+    }
+
+    pub fn to_program(&self, opts: &TranslationOptions) -> Result<Ctx, String> {
+        let mut ctx = Ctx::new();
+
+        self.gen_function_arguments(opts, &mut ctx)?;
+        self.gen_channels(opts, &mut ctx)?;
 
         // Generate entry point process
         // which would push all constant, non-hold values
@@ -855,399 +1250,20 @@ impl Graph {
             }
         }
 
-        // Generate concrete processes
+        // Generate each operator
         for op in &self.ops {
-            let name = Self::proc_name(op);
-
-            let perm_var: PermVar = format!("p{}", perms.len()).into();
-            perms.push(PermDeclX::new(&perm_var, []));
-
-            let mut res = vec![ProcResourceX::perm(PermissionX::var(
-                &perm_var,
-                [] as [Term; 0],
-            ))];
-            res.extend(Self::gen_io_resources(op));
-
-            let recurse = ProcX::call(name.clone(), [] as [Term; 0]);
-
-            entry_proc = ProcX::par(recurse.clone(), entry_proc);
-
-            match op.kind {
-                OperatorKind::Id => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        send TermX::var("a") => port 0;
-                        call name;
-                }),
-
-                OperatorKind::Add => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        send TermX::bvadd(TermX::var("a"), TermX::var("b")) => port 0;
-                        call name;
-                }),
-
-                OperatorKind::Mul => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        send TermX::bvmul(TermX::var("a"), TermX::var("b")) => port 0;
-                        call name;
-                }),
-
-                OperatorKind::ULT => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        if (TermX::bvult(TermX::var("a"), TermX::var("b"))) {
-                            send TermX::bit_vec(1, opts.word_width) => port 0;
-                            call name;
-                        } else {
-                            send TermX::bit_vec(0, opts.word_width) => port 0;
-                            call name;
-                        }
-                }),
-
-                OperatorKind::SLT => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        if (TermX::bvslt(TermX::var("a"), TermX::var("b"))) {
-                            send TermX::bit_vec(1, opts.word_width) => port 0;
-                            call name;
-                        } else {
-                            send TermX::bit_vec(0, opts.word_width) => port 0;
-                            call name;
-                        }
-                }),
-
-                OperatorKind::SGT => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        if (TermX::bvsgt(TermX::var("a"), TermX::var("b"))) {
-                            send TermX::bit_vec(1, opts.word_width) => port 0;
-                            call name;
-                        } else {
-                            send TermX::bit_vec(0, opts.word_width) => port 0;
-                            call name;
-                        }
-                }),
-
-                OperatorKind::Eq => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv a <= port 0;
-                        recv b <= port 1;
-                        if (TermX::eq(TermX::var("a"), TermX::var("b"))) {
-                            send TermX::bit_vec(1, opts.word_width) => port 0;
-                            call name;
-                        } else {
-                            send TermX::bit_vec(0, opts.word_width) => port 0;
-                            call name;
-                        }
-                }),
-
-                OperatorKind::Select => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv d <= port 0;
-                        recv a <= port 1;
-                        recv b <= port 2;
-                        if (TermX::not(TermX::eq(
-                            TermX::var("d"),
-                            TermX::bit_vec(0, opts.word_width),
-                        ))) {
-                            send TermX::var("a") => port 0;
-                            call name;
-                        } else {
-                            send TermX::var("b") => port 0;
-                            call name;
-                        }
-                }),
-
-                OperatorKind::GEP => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv r <= port 0;
-                        recv i <= port 1;
-                        // *r[i..]
-                        send TermX::reference(MutReferenceX::slice(
-                            MutReferenceX::deref(TermX::var("r")),
-                            Some(&TermX::var("i")),
-                            None,
-                        )) => port 0;
-                        call name;
-                }),
-
-                OperatorKind::Ld => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv r <= port 0;
-                        recv i <= port 1;
-                        read x <= MutReferenceX::index(
-                            MutReferenceX::deref(TermX::var("r")),
-                            TermX::var("i"),
-                        );
-                        send TermX::var("x") => port 0;
-                        call name;
-                }),
-
-                OperatorKind::LdSync => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv r <= port 0;
-                        recv i <= port 1;
-                        recv s <= port 2;
-                        read x <= MutReferenceX::index(
-                            MutReferenceX::deref(TermX::var("r")),
-                            TermX::var("i"),
-                        );
-                        send TermX::var("x") => port 0;
-                        call name;
-                }),
-
-                OperatorKind::St => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv r <= port 0;
-                        recv i <= port 1;
-                        recv x <= port 2;
-                        write TermX::var("x") => MutReferenceX::index(
-                            MutReferenceX::deref(TermX::var("r")),
-                            TermX::var("i"),
-                        );
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                }),
-
-                OperatorKind::StSync => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv r <= port 0;
-                        recv i <= port 1;
-                        recv x <= port 2;
-                        recv s <= port 3;
-                        write TermX::var("x") => MutReferenceX::index(
-                            MutReferenceX::deref(TermX::var("r")),
-                            TermX::var("i"),
-                        );
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                }),
-
-                OperatorKind::Steer(pred) => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv d <= port 0;
-                        recv x <= port 1;
-                        if (if pred {
-                            TermX::not(TermX::eq(
-                                TermX::var("d"),
-                                TermX::bit_vec(0, opts.word_width),
-                            ))
-                        } else {
-                            TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                        }) {
-                            send TermX::var("x") => port 0;
-                            call name;
-                        } else {
-                            call name;
-                        }
-                }),
-
-                OperatorKind::Inv(pred) => {
-                    let state1: ProcName = name.clone();
-                    let state2: ProcName = format!("{}Loop", name).into();
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state1; res =>
-                            recv a <= port 1;
-                            send TermX::var("a") => port 0;
-                            call state1;
-                    });
-
-                    // Generate a new permission var for the second state
-                    let inv_type = &chan_types[&op.inputs[1].id()];
-                    let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    match inv_type.as_ref() {
-                        TermTypeX::Base(base) => {
-                            perms.push(PermDeclX::new(&perm_var, [base.clone()]))
-                        }
-                        TermTypeX::Ref(..) =>
-                        // TODO: reference dependency not supported
-                        {
-                            perms.push(PermDeclX::new(&perm_var, []))
-                        }
-                    }
-
-                    let mut res = vec![
-                        // p(inv_value)
-                        ProcResourceX::perm(PermissionX::var(&perm_var, [TermX::var("a")])),
-                    ];
-                    res.extend(Self::gen_io_resources(op));
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state2, ProcParamX::new("a", inv_type); res =>
-                            recv d <= port 0;
-                            if (if pred {
-                                TermX::not(TermX::eq(
-                                    TermX::var("d"),
-                                    TermX::bit_vec(0, opts.word_width),
-                                ))
-                            } else {
-                                TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                            }) {
-                                send TermX::var("a") => port 0;
-                                call state2, TermX::var("a");
-                            } else {
-                                call state1;
-                            }
-                    });
-                }
-
-                OperatorKind::Stream(pred) => {
-                    let state1: ProcName = name.clone();
-                    let state2: ProcName = format!("{}Loop", name).into();
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state1; res =>
-                            recv start <= port 0;
-                            recv bound <= port 1;
-                            recv step <= port 2;
-                            call state2, TermX::var("start"), TermX::var("bound"), TermX::var("step");
-                    });
-
-                    // Generate a new permission var for the second state
-                    let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    perms.push(PermDeclX::new(
-                        &perm_var,
-                        [
-                            BaseType::BitVec(opts.word_width),
-                            BaseType::BitVec(opts.word_width),
-                            BaseType::BitVec(opts.word_width),
-                        ],
-                    ));
-
-                    let mut res = vec![
-                        // p(start, bound, step)
-                        ProcResourceX::perm(PermissionX::var(
-                            &perm_var,
-                            [TermX::var("start"), TermX::var("bound"), TermX::var("step")],
-                        )),
-                    ];
-                    res.extend(Self::gen_io_resources(op));
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state2,
-                            ProcParamX::new("start", TermTypeX::bit_vec(opts.word_width)),
-                            ProcParamX::new("bound", TermTypeX::bit_vec(opts.word_width)),
-                            ProcParamX::new("step", TermTypeX::bit_vec(opts.word_width)); res =>
-                            if (TermX::bvslt(TermX::var("start"), TermX::var("bound"))) {
-                                send TermX::var("start") => port 0;
-                                send TermX::bit_vec(if pred { 1 } else { 0 }, opts.word_width) => port 1;
-                                call state2,
-                                    TermX::bvadd(TermX::var("start"), TermX::var("step")),
-                                    TermX::var("bound"),
-                                    TermX::var("step");
-                            } else {
-                                send TermX::bit_vec(if pred { 0 } else { 1 }, opts.word_width) => port 1;
-                                call state1;
-                            }
-                    });
-                }
-
-                OperatorKind::Carry(pred) => {
-                    let state1: ProcName = name.clone();
-                    let state2: ProcName = format!("{}Loop", name).into();
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state1; res =>
-                            recv a <= port 1;
-                            send TermX::var("a") => port 0;
-                            call state2;
-                    });
-
-                    // Generate a new permission var for the second state
-                    let perm_var: PermVar = format!("p{}", perms.len()).into();
-                    perms.push(PermDeclX::new(&perm_var, []));
-
-                    let mut res = vec![ProcResourceX::perm(PermissionX::var(
-                        &perm_var,
-                        [] as [Term; 0],
-                    ))];
-                    res.extend(Self::gen_io_resources(op));
-
-                    procs.push(riptide! {
-                        (opts, op)
-                        proc state2; res =>
-                            recv d <= port 0;
-                            if (if pred {
-                                TermX::not(TermX::eq(
-                                    TermX::var("d"),
-                                    TermX::bit_vec(0, opts.word_width),
-                                ))
-                            } else {
-                                TermX::eq(TermX::var("d"), TermX::bit_vec(0, opts.word_width))
-                            }) {
-                                recv b <= port 2;
-                                send TermX::var("b") => port 0;
-                                call state2;
-                            } else {
-                                call state1;
-                            }
-                    });
-                }
-
-                OperatorKind::Merge => procs.push(riptide! {
-                    (opts, op)
-                    proc name; res =>
-                        recv d <= port 0;
-                        if (TermX::not(TermX::eq(
-                            TermX::var("d"),
-                            TermX::bit_vec(0, opts.word_width),
-                        ))) {
-                            recv a <= port 1;
-                            send TermX::var("a") => port 0;
-                            call name;
-                        } else {
-                            recv b <= port 2;
-                            send TermX::var("b") => port 0;
-                            call name;
-                        }
-                }),
-            }
+            let name = self.gen_operator(op, opts, &mut ctx)?;
+            entry_proc = ProcX::par(ProcX::call(name, [] as [Term; 0]), entry_proc);
         }
 
         // Finally, generate an entry process `Program`
-        procs.push(ProcDeclX::new_all_res(
+        ctx.add_proc(&ProcDeclX::new_all_res(
             "Program",
             [] as [ProcParam; 0],
             entry_proc,
-        ));
+        ))?;
 
-        Ok(Rc::new(ProgramX {
-            decls: consts
-                .iter()
-                .map(|d| DeclX::new_const(d))
-                .chain(muts.iter().map(|d| DeclX::new_mut(d)))
-                .chain(perms.iter().map(|d| DeclX::new_perm(d)))
-                .chain(chans.iter().map(|d| DeclX::new_chan(d)))
-                .chain(procs.iter().map(|d| DeclX::new_proc(d)))
-                .collect(),
-        }))
+        Ok(ctx)
     }
 }
 

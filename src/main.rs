@@ -75,13 +75,14 @@ struct Args {
 fn type_check(mut args: Args) -> Result<(), Error> {
     let path: FilePath = args.source.into();
 
-    let program = match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
+    let ctx = match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
         // Parse from dfl source
         Some(b"dfl") => {
             let src: Source = fs::read_to_string(path.as_str())?.into();
-            syntax::ProgramParser::new()
+            let program = syntax::ProgramParser::new()
                 .parse(&path, &src, src.as_str())
-                .map_err(|e| SpannedError::from_parse_error(&path, &src, e))?
+                .map_err(|e| SpannedError::from_parse_error(&path, &src, e))?;
+            Ctx::from(&program)?
         }
 
         // Translate from RipTide dataflow graph
@@ -91,16 +92,15 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             let graph = Graph::from_reader(reader)?;
             println!("parsed: {:?}", graph);
             // println!("{}", graph.to_program(32).unwrap());
-            let program = graph.to_program(&TranslationOptions { word_width: 32 })?;
+            let ctx = graph.to_program(&TranslationOptions { word_width: 32 })?;
+            let program: Program = (&ctx).into();
 
             println!("{}", program);
-            program
+            ctx
         }
 
         _ => Err(format!("unknown extension {}", path))?,
     };
-
-    let ctx = Ctx::from(&program)?;
 
     if args.check_perm && args.infer_perm {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;
