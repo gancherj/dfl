@@ -331,6 +331,43 @@ macro_rules! riptide {
     };
 }
 
+macro_rules! arith_op_translation {
+    // Binary operator reading from port 0 and 1
+    // applying a binary function TermX::$fn
+    // and then sending the output to port 0
+    ($opts:expr, $op:expr, $ctx:expr, $name:expr, $res:expr, $fn:ident) => {
+        $ctx.add_proc(&riptide! {
+            ($opts, $op)
+            proc $name; $res =>
+                recv a <= port 0;
+                recv b <= port 1;
+                send TermX::$fn(TermX::var("a"), TermX::var("b")) => port 0;
+                call $name;
+        })?
+    };
+}
+
+macro_rules! pred_op_translation {
+    // Binary predicate operator reading from port 0 and 1
+    // applying a binary function TermX::$fn
+    // and then sending the output (1 if the result is non-zero, 0 otherwise) to port 0
+    ($opts:expr, $op:expr, $ctx:expr, $name:expr, $res:expr, $fn:ident) => {
+        $ctx.add_proc(&riptide! {
+            ($opts, $op)
+            proc $name; $res =>
+                recv a <= port 0;
+                recv b <= port 1;
+                if (TermX::$fn(TermX::var("a"), TermX::var("b"))) {
+                    send TermX::bit_vec(1, $opts.word_width) => port 0;
+                    call $name;
+                } else {
+                    send TermX::bit_vec(0, $opts.word_width) => port 0;
+                    call $name;
+                }
+        })?
+    };
+}
+
 impl Graph {
     pub fn from_reader(reader: impl io::Read) -> io::Result<Graph> {
         Graph::from_raw(&serde_json::from_reader(reader)?).map_err(|msg| io::Error::other(msg))
@@ -889,212 +926,28 @@ impl Graph {
                     call name;
             })?,
 
-            OperatorKind::Add => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvadd(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
+            OperatorKind::Add => arith_op_translation!(opts, op, ctx, name, res, bvadd),
+            OperatorKind::Sub => arith_op_translation!(opts, op, ctx, name, res, bvsub),
+            OperatorKind::Mul => arith_op_translation!(opts, op, ctx, name, res, bvmul),
 
-            OperatorKind::Sub => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvsub(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
+            OperatorKind::ULT => pred_op_translation!(opts, op, ctx, name, res, bvult),
+            OperatorKind::UGT => pred_op_translation!(opts, op, ctx, name, res, bvugt),
+            OperatorKind::ULE => pred_op_translation!(opts, op, ctx, name, res, bvule),
+            OperatorKind::UGE => pred_op_translation!(opts, op, ctx, name, res, bvuge),
+            OperatorKind::SLT => pred_op_translation!(opts, op, ctx, name, res, bvslt),
+            OperatorKind::SGT => pred_op_translation!(opts, op, ctx, name, res, bvsgt),
+            OperatorKind::SLE => pred_op_translation!(opts, op, ctx, name, res, bvsle),
+            OperatorKind::SGE => pred_op_translation!(opts, op, ctx, name, res, bvsge),
 
-            OperatorKind::Mul => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvmul(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
+            OperatorKind::SHL => arith_op_translation!(opts, op, ctx, name, res, bvshl),
+            OperatorKind::ASHR => arith_op_translation!(opts, op, ctx, name, res, bvashr),
+            OperatorKind::LSHR => arith_op_translation!(opts, op, ctx, name, res, bvlshr),
 
-            OperatorKind::ULT => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvult(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
+            OperatorKind::And => arith_op_translation!(opts, op, ctx, name, res, bvand),
+            OperatorKind::Or => arith_op_translation!(opts, op, ctx, name, res, bvor),
+            OperatorKind::Xor => arith_op_translation!(opts, op, ctx, name, res, bvxor),
 
-            OperatorKind::UGT => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvugt(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::ULE => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvule(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::UGE => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvuge(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::SLT => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvslt(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::SGT => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvsgt(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::SLE => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvsle(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::SGE => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::bvsge(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
-
-            OperatorKind::SHL => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvshl(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::ASHR => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvashr(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::LSHR => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvlshr(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::And => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvand(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::Or => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvor(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::Xor => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    send TermX::bvxor(TermX::var("a"), TermX::var("b")) => port 0;
-                    call name;
-            })?,
-
-            OperatorKind::Eq => ctx.add_proc(&riptide! {
-                (opts, op)
-                proc name; res =>
-                    recv a <= port 0;
-                    recv b <= port 1;
-                    if (TermX::eq(TermX::var("a"), TermX::var("b"))) {
-                        send TermX::bit_vec(1, opts.word_width) => port 0;
-                        call name;
-                    } else {
-                        send TermX::bit_vec(0, opts.word_width) => port 0;
-                        call name;
-                    }
-            })?,
+            OperatorKind::Eq => pred_op_translation!(opts, op, ctx, name, res, eq),
 
             OperatorKind::Select => ctx.add_proc(&riptide! {
                 (opts, op)
