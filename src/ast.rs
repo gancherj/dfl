@@ -736,8 +736,44 @@ impl TermX {
         Spanned::new(TermX::BVMul(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn bvshl(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVSHL(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvashr(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVASHR(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvlshr(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVLSHR(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvand(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVAnd(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvor(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVOr(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvxor(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVXor(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn bvult(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::BVULT(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvugt(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVUGT(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvule(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVULE(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvuge(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVUGE(t1.borrow().clone(), t2.borrow().clone()))
     }
 
     pub fn bvslt(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
@@ -746,6 +782,14 @@ impl TermX {
 
     pub fn bvsgt(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::BVSGT(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvsle(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVSLE(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
+    pub fn bvsge(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVSGE(t1.borrow().clone(), t2.borrow().clone()))
     }
 
     pub fn eq(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {

@@ -244,6 +244,12 @@ impl MutReferenceTypeX {
     /// consider subtypings like A[1..][1..] <= A[2..]
     /// i.e. both references need to be of the same "shape"
     pub fn is_subtype(ctx: &Ctx, this: &MutReferenceType, other: &MutReferenceType) -> bool {
+        if let (MutReferenceTypeX::Base(n1), MutReferenceTypeX::Base(n2)) =
+            (this.as_ref(), other.as_ref())
+        {
+            return n1 == n2;
+        }
+
         let this_canon = MutReferenceTypeX::canonicalize(ctx, this);
         let other_canon = MutReferenceTypeX::canonicalize(ctx, other);
         match (
@@ -253,7 +259,7 @@ impl MutReferenceTypeX {
             (Ok(MutReferenceTypeX::Base(n1)), Ok(MutReferenceTypeX::Base(n2))) => n1 == n2,
             (Ok(MutReferenceTypeX::Index(m1, i1)), Ok(MutReferenceTypeX::Index(m2, i2)))
             | (Ok(MutReferenceTypeX::Offset(m1, i1)), Ok(MutReferenceTypeX::Offset(m2, i2))) => {
-                m1 == m2 || MutReferenceTypeX::is_subtype(ctx, m1, m2) && i1.is_subsumed_by(i2)
+                MutReferenceTypeX::is_subtype(ctx, m1, m2) && i1.is_subsumed_by(i2)
             }
             _ => false,
         }

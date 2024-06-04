@@ -179,7 +179,7 @@ Term: Term = {
 
     #[precedence(level = "4")]
     <start:@L> "not" <t:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Not(t)),
-    
+
     #[precedence(level = "5")]
     #[assoc(side="left")]
     <start:@L> <t1:Term> "and" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::And(t1, t2)),

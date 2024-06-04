@@ -142,8 +142,19 @@ pub enum OperatorKind {
     Sub,
     Mul,
     ULT,
+    UGT,
+    ULE,
+    UGE,
     SLT,
     SGT,
+    SLE,
+    SGE,
+    SHL,
+    ASHR,
+    LSHR,
+    And,
+    Or,
+    Xor,
     Eq,
     Select,
     GEP,
@@ -192,8 +203,19 @@ impl OperatorKind {
             "ARITH_CFG_OP_SUB" => Ok(OperatorKind::Sub),
             "MUL_CFG_OP_MUL" => Ok(OperatorKind::Mul),
             "ARITH_CFG_OP_ULT" => Ok(OperatorKind::ULT),
+            "ARITH_CFG_OP_UGT" => Ok(OperatorKind::UGT),
+            "ARITH_CFG_OP_ULE" => Ok(OperatorKind::ULE),
+            "ARITH_CFG_OP_UGE" => Ok(OperatorKind::UGE),
             "ARITH_CFG_OP_SLT" => Ok(OperatorKind::SLT),
             "ARITH_CFG_OP_SGT" => Ok(OperatorKind::SGT),
+            "ARITH_CFG_OP_SLE" => Ok(OperatorKind::SLE),
+            "ARITH_CFG_OP_SGE" => Ok(OperatorKind::SGE),
+            "ARITH_CFG_OP_SHL" => Ok(OperatorKind::SHL),
+            "ARITH_CFG_OP_ASHR" => Ok(OperatorKind::ASHR),
+            "ARITH_CFG_OP_LSHR" => Ok(OperatorKind::LSHR),
+            "ARITH_CFG_OP_AND" => Ok(OperatorKind::And),
+            "ARITH_CFG_OP_OR" => Ok(OperatorKind::Or),
+            "ARITH_CFG_OP_XOR" => Ok(OperatorKind::Xor),
             "ARITH_CFG_OP_EQ" => Ok(OperatorKind::Eq),
             "CF_CFG_OP_SELECT" => Ok(OperatorKind::Select),
             "ARITH_CFG_OP_GEP" => Ok(OperatorKind::GEP),
@@ -617,8 +639,19 @@ impl Graph {
                 | OperatorKind::Sub
                 | OperatorKind::Mul
                 | OperatorKind::ULT
+                | OperatorKind::UGT
+                | OperatorKind::ULE
+                | OperatorKind::UGE
                 | OperatorKind::SLT
                 | OperatorKind::SGT
+                | OperatorKind::SLE
+                | OperatorKind::SGE
+                | OperatorKind::SHL
+                | OperatorKind::ASHR
+                | OperatorKind::LSHR
+                | OperatorKind::And
+                | OperatorKind::Or
+                | OperatorKind::Xor
                 | OperatorKind::Eq
                 | OperatorKind::Ld
                 | OperatorKind::LdSync
@@ -897,6 +930,48 @@ impl Graph {
                     }
             })?,
 
+            OperatorKind::UGT => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvugt(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::ULE => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvule(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::UGE => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvuge(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
             OperatorKind::SLT => ctx.add_proc(&riptide! {
                 (opts, op)
                 proc name; res =>
@@ -923,6 +998,88 @@ impl Graph {
                         send TermX::bit_vec(0, opts.word_width) => port 0;
                         call name;
                     }
+            })?,
+
+            OperatorKind::SLE => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvsle(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::SGE => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    if (TermX::bvsge(TermX::var("a"), TermX::var("b"))) {
+                        send TermX::bit_vec(1, opts.word_width) => port 0;
+                        call name;
+                    } else {
+                        send TermX::bit_vec(0, opts.word_width) => port 0;
+                        call name;
+                    }
+            })?,
+
+            OperatorKind::SHL => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvshl(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::ASHR => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvashr(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::LSHR => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvlshr(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::And => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvand(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Or => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvor(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Xor => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvxor(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
             })?,
 
             OperatorKind::Eq => ctx.add_proc(&riptide! {
@@ -1062,19 +1219,23 @@ impl Graph {
                 // Generate a new permission var for the second state
                 let inv_type = ctx.chans[&Self::channel_name(&op.inputs[1])].typ.clone();
 
-                let perm_var: PermVar = match inv_type.as_ref() {
-                    TermTypeX::Base(base) => Self::add_fresh_perm_var(ctx, [base.clone()])?,
-                    TermTypeX::Ref(..) =>
-                    // TODO: reference dependency not supported
-                    {
-                        Self::add_fresh_perm_var(ctx, [])?
+                let mut res = match inv_type.as_ref() {
+                    TermTypeX::Base(base) => {
+                        let perm_var = Self::add_fresh_perm_var(ctx, [base.clone()])?;
+                        vec![ProcResourceX::perm(PermissionX::var(
+                            &perm_var,
+                            [TermX::var("a")],
+                        ))]
+                    }
+                    TermTypeX::Ref(..) => {
+                        // TODO: reference dependency not supported
+                        let perm_var = Self::add_fresh_perm_var(ctx, [])?;
+                        vec![ProcResourceX::perm(PermissionX::var(
+                            &perm_var,
+                            [] as [Term; 0],
+                        ))]
                     }
                 };
-
-                let mut res = vec![
-                    // p(inv_value)
-                    ProcResourceX::perm(PermissionX::var(&perm_var, [TermX::var("a")])),
-                ];
                 res.extend(Self::gen_io_resources(op));
 
                 ctx.add_proc(&riptide! {
@@ -1258,8 +1419,19 @@ impl fmt::Display for OperatorKind {
             OperatorKind::Sub => write!(f, "Sub"),
             OperatorKind::Mul => write!(f, "Mul"),
             OperatorKind::ULT => write!(f, "ULT"),
+            OperatorKind::UGT => write!(f, "UGT"),
+            OperatorKind::ULE => write!(f, "ULE"),
+            OperatorKind::UGE => write!(f, "UGE"),
             OperatorKind::SLT => write!(f, "SLT"),
             OperatorKind::SGT => write!(f, "SGT"),
+            OperatorKind::SLE => write!(f, "SLE"),
+            OperatorKind::SGE => write!(f, "SGE"),
+            OperatorKind::SHL => write!(f, "SHL"),
+            OperatorKind::ASHR => write!(f, "ASHR"),
+            OperatorKind::LSHR => write!(f, "LSHR"),
+            OperatorKind::And => write!(f, "And"),
+            OperatorKind::Or => write!(f, "Or"),
+            OperatorKind::Xor => write!(f, "Xor"),
             OperatorKind::Eq => write!(f, "Eq"),
             OperatorKind::Select => write!(f, "Select"),
             OperatorKind::GEP => write!(f, "GEP"),
