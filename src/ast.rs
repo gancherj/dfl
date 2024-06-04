@@ -849,16 +849,13 @@ impl TermX {
             TermX::Var(var) => {
                 vars.insert(var.clone());
             }
-            TermX::Const(..)
-            | TermX::Bool(..)
-            | TermX::Int(..)
-            | TermX::BitVec(..) => {}
+            TermX::Const(..) | TermX::Bool(..) | TermX::Int(..) | TermX::BitVec(..) => {}
             TermX::Ref(m) => {
                 m.free_vars_inplace(vars);
             }
             TermX::Add(t1, t2)
             | TermX::BVAdd(t1, t2)
-            | TermX::BVSub(t1, t2) 
+            | TermX::BVSub(t1, t2)
             | TermX::Mul(t1, t2)
             | TermX::BVMul(t1, t2)
             | TermX::And(t1, t2)
@@ -896,9 +893,19 @@ impl TermX {
     /// Precedence of the top level operator
     fn precedence(&self) -> u32 {
         match self {
-            TermX::Var(..)| TermX::Const(..) | TermX::Bool(..) | TermX::Int(..) | TermX::BitVec(..) | TermX::Ref(..) => 0,
+            TermX::Var(..)
+            | TermX::Const(..)
+            | TermX::Bool(..)
+            | TermX::Int(..)
+            | TermX::BitVec(..)
+            | TermX::Ref(..) => 0,
             TermX::Mul(..) | TermX::BVMul(..) => 1,
-            TermX::Add(..) | TermX::BVAdd(..) | TermX::BVSub(..) | TermX::BVSHL(..) | TermX::BVASHR(..) | TermX::BVLSHR(..) => 2,
+            TermX::Add(..)
+            | TermX::BVAdd(..)
+            | TermX::BVSub(..)
+            | TermX::BVSHL(..)
+            | TermX::BVASHR(..)
+            | TermX::BVLSHR(..) => 2,
             TermX::Less(..)
             | TermX::BVULT(..)
             | TermX::BVUGT(..)
@@ -1375,8 +1382,7 @@ impl PermissionX {
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             PermissionX::Empty => {}
-            PermissionX::Add(p1, p2)
-            | PermissionX::Sub(p1, p2) => {
+            PermissionX::Add(p1, p2) | PermissionX::Sub(p1, p2) => {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }

@@ -257,34 +257,6 @@ pub struct TranslationOptions {
     pub word_width: BitVecWidth,
 }
 
-// Self::recv_from_input(
-//     opts,
-//     op,
-//     0,
-//     "a",
-//     Self::recv_from_input(
-//         opts,
-//         op,
-//         1,
-//         "b",
-//         ProcX::ite(
-//             TermX::bvult(TermX::var("a"), TermX::var("b")),
-//             Self::send_to_outputs(
-//                 op,
-//                 0,
-//                 TermX::bit_vec(1, opts.word_width),
-//                 recurse.clone(),
-//             ),
-//             Self::send_to_outputs(
-//                 op,
-//                 0,
-//                 TermX::bit_vec(0, opts.word_width),
-//                 recurse.clone(),
-//             ),
-//         ),
-//     ),
-// ),
-
 /// Returns Proc
 macro_rules! riptide_proc {
     (($opts:expr, $op:expr)) => {};
@@ -334,8 +306,7 @@ macro_rules! riptide {
             $res,
             riptide_proc! { ($opts, $op) $($rest)* }
         )
-    }
-
+    };
 }
 
 impl Graph {
