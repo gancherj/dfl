@@ -297,8 +297,36 @@ impl TermX {
         TermX::app("bvadd", [a.borrow(), b.borrow()])
     }
 
+    pub fn bvsub(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvsub", [a.borrow(), b.borrow()])
+    }
+
     pub fn bvmul(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvmul", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvshl(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvshl", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvashr(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvashr", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvlshr(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvlshr", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvand(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvand", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvor(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvor", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvxor(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvxor", [a.borrow(), b.borrow()])
     }
 
     pub fn add(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
@@ -343,12 +371,16 @@ impl TermX {
         TermX::app("bvult", [a.borrow(), b.borrow()])
     }
 
+    pub fn bvugt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvugt", [a.borrow(), b.borrow()])
+    }
+
     pub fn bvule(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvule", [a.borrow(), b.borrow()])
     }
 
-    pub fn bvugt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
-        TermX::app("bvugt", [a.borrow(), b.borrow()])
+    pub fn bvuge(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvuge", [a.borrow(), b.borrow()])
     }
 
     pub fn bvslt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
@@ -357,6 +389,10 @@ impl TermX {
 
     pub fn bvsgt(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvsgt", [a.borrow(), b.borrow()])
+    }
+
+    pub fn bvsle(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("bvsle", [a.borrow(), b.borrow()])
     }
 
     pub fn bvsge(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {

@@ -131,10 +131,25 @@ pub enum TermX {
 
     // BV operations,
     BVAdd(Term, Term),
+    BVSub(Term, Term),
     BVMul(Term, Term),
+
     BVULT(Term, Term),
+    BVUGT(Term, Term),
+    BVULE(Term, Term),
+    BVUGE(Term, Term),
     BVSLT(Term, Term),
     BVSGT(Term, Term),
+    BVSLE(Term, Term),
+    BVSGE(Term, Term),
+
+    BVASHR(Term, Term),
+    BVLSHR(Term, Term),
+    BVSHL(Term, Term),
+
+    BVAnd(Term, Term),
+    BVOr(Term, Term),
+    BVXor(Term, Term),
 
     Equal(Term, Term),
     And(Term, Term),
@@ -713,6 +728,10 @@ impl TermX {
         Spanned::new(TermX::BVAdd(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn bvsub(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
+        Spanned::new(TermX::BVAdd(t1.borrow().clone(), t2.borrow().clone()))
+    }
+
     pub fn bvmul(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::BVMul(t1.borrow().clone(), t2.borrow().clone()))
     }
@@ -756,6 +775,9 @@ impl TermX {
             TermX::BVAdd(t1, t2) => {
                 substitute_inplace!(term, TermX::BVAdd, TermX, t1, TermX, t2, subst)
             }
+            TermX::BVSub(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSub, TermX, t1, TermX, t2, subst)
+            }
             TermX::Mul(t1, t2) => {
                 substitute_inplace!(term, TermX::Mul, TermX, t1, TermX, t2, subst)
             }
@@ -771,11 +793,44 @@ impl TermX {
             TermX::BVULT(t1, t2) => {
                 substitute_inplace!(term, TermX::BVULT, TermX, t1, TermX, t2, subst)
             }
+            TermX::BVUGT(t1, t2) => {
+                substitute_inplace!(term, TermX::BVUGT, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVULE(t1, t2) => {
+                substitute_inplace!(term, TermX::BVULE, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVUGE(t1, t2) => {
+                substitute_inplace!(term, TermX::BVUGE, TermX, t1, TermX, t2, subst)
+            }
             TermX::BVSLT(t1, t2) => {
                 substitute_inplace!(term, TermX::BVSLT, TermX, t1, TermX, t2, subst)
             }
             TermX::BVSGT(t1, t2) => {
                 substitute_inplace!(term, TermX::BVSGT, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVSLE(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSLE, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVSGE(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSGE, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVSHL(t1, t2) => {
+                substitute_inplace!(term, TermX::BVSHL, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVLSHR(t1, t2) => {
+                substitute_inplace!(term, TermX::BVLSHR, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVASHR(t1, t2) => {
+                substitute_inplace!(term, TermX::BVASHR, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVAnd(t1, t2) => {
+                substitute_inplace!(term, TermX::BVAnd, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVOr(t1, t2) => {
+                substitute_inplace!(term, TermX::BVOr, TermX, t1, TermX, t2, subst)
+            }
+            TermX::BVXor(t1, t2) => {
+                substitute_inplace!(term, TermX::BVXor, TermX, t1, TermX, t2, subst)
             }
             TermX::Equal(t1, t2) => {
                 substitute_inplace!(term, TermX::Equal, TermX, t1, TermX, t2, subst)
@@ -794,50 +849,35 @@ impl TermX {
             TermX::Var(var) => {
                 vars.insert(var.clone());
             }
-            TermX::Const(..) => {}
-            TermX::Bool(..) => {}
-            TermX::Int(..) => {}
-            TermX::BitVec(..) => {}
+            TermX::Const(..)
+            | TermX::Bool(..)
+            | TermX::Int(..)
+            | TermX::BitVec(..) => {}
             TermX::Ref(m) => {
                 m.free_vars_inplace(vars);
             }
-            TermX::Add(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::BVAdd(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::Mul(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::BVMul(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::And(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::Less(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::BVULT(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::BVSLT(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::BVSGT(t1, t2) => {
-                t1.free_vars_inplace(vars);
-                t2.free_vars_inplace(vars);
-            }
-            TermX::Equal(t1, t2) => {
+            TermX::Add(t1, t2)
+            | TermX::BVAdd(t1, t2)
+            | TermX::BVSub(t1, t2) 
+            | TermX::Mul(t1, t2)
+            | TermX::BVMul(t1, t2)
+            | TermX::And(t1, t2)
+            | TermX::Less(t1, t2)
+            | TermX::BVULT(t1, t2)
+            | TermX::BVUGT(t1, t2)
+            | TermX::BVULE(t1, t2)
+            | TermX::BVUGE(t1, t2)
+            | TermX::BVSLT(t1, t2)
+            | TermX::BVSGT(t1, t2)
+            | TermX::BVSLE(t1, t2)
+            | TermX::BVSGE(t1, t2)
+            | TermX::BVSHL(t1, t2)
+            | TermX::BVASHR(t1, t2)
+            | TermX::BVLSHR(t1, t2)
+            | TermX::BVAnd(t1, t2)
+            | TermX::BVOr(t1, t2)
+            | TermX::BVXor(t1, t2)
+            | TermX::Equal(t1, t2) => {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
@@ -856,23 +896,24 @@ impl TermX {
     /// Precedence of the top level operator
     fn precedence(&self) -> u32 {
         match self {
-            TermX::Var(..) => 0,
-            TermX::Const(..) => 0,
-            TermX::Bool(..) => 0,
-            TermX::Int(..) => 0,
-            TermX::BitVec(..) => 0,
-            TermX::Ref(..) => 0,
-            TermX::Add(..) => 2,
-            TermX::BVAdd(..) => 2,
-            TermX::Mul(..) => 1,
-            TermX::BVMul(..) => 1,
-            TermX::And(..) => 5,
-            TermX::Less(..) => 3,
-            TermX::BVULT(..) => 3,
-            TermX::BVSLT(..) => 3,
-            TermX::BVSGT(..) => 3,
-            TermX::Equal(..) => 3,
+            TermX::Var(..)| TermX::Const(..) | TermX::Bool(..) | TermX::Int(..) | TermX::BitVec(..) | TermX::Ref(..) => 0,
+            TermX::Mul(..) | TermX::BVMul(..) => 1,
+            TermX::Add(..) | TermX::BVAdd(..) | TermX::BVSub(..) | TermX::BVSHL(..) | TermX::BVASHR(..) | TermX::BVLSHR(..) => 2,
+            TermX::Less(..)
+            | TermX::BVULT(..)
+            | TermX::BVUGT(..)
+            | TermX::BVULE(..)
+            | TermX::BVUGE(..)
+            | TermX::BVSLT(..)
+            | TermX::BVSGT(..)
+            | TermX::BVSLE(..)
+            | TermX::BVSGE(..)
+            | TermX::Equal(..)
+            | TermX::BVAnd(..)
+            | TermX::BVOr(..)
+            | TermX::BVXor(..) => 3,
             TermX::Not(..) => 4,
+            TermX::And(..) => 5,
         }
     }
 }
@@ -1334,11 +1375,8 @@ impl PermissionX {
     fn free_vars_inplace(&self, vars: &mut IndexSet<Var>) {
         match self {
             PermissionX::Empty => {}
-            PermissionX::Add(p1, p2) => {
-                p1.free_vars_inplace(vars);
-                p2.free_vars_inplace(vars);
-            }
-            PermissionX::Sub(p1, p2) => {
+            PermissionX::Add(p1, p2)
+            | PermissionX::Sub(p1, p2) => {
                 p1.free_vars_inplace(vars);
                 p2.free_vars_inplace(vars);
             }
@@ -1413,6 +1451,23 @@ impl fmt::Display for MutTypeX {
     }
 }
 
+macro_rules! term_op_format {
+    // Binary operator
+    ($self:expr, $f:expr, $op:expr, $t1:expr, $t2:expr) => {{
+        if $t1.precedence() <= $self.precedence() {
+            write!($f, "{}", $t1)?;
+        } else {
+            write!($f, "({})", $t1)?;
+        }
+        if $t2.precedence() <= $self.precedence() {
+            write!($f, " {} {}", $op, $t2)?;
+        } else {
+            write!($f, " {} ({})", $op, $t2)?;
+        }
+        Ok(())
+    }};
+}
+
 impl fmt::Display for TermX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1422,136 +1477,28 @@ impl fmt::Display for TermX {
             TermX::Int(i) => write!(f, "{}", i),
             TermX::BitVec(i, w) => write!(f, "{}bv{}", i, w),
             TermX::Ref(m) => write!(f, "&{}", m),
-            TermX::Add(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " + {}", t2)?;
-                } else {
-                    write!(f, " + ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::BVAdd(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " +bv {}", t2)?;
-                } else {
-                    write!(f, " +bv ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::Mul(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " * {}", t2)?;
-                } else {
-                    write!(f, " * ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::BVMul(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " *bv {}", t2)?;
-                } else {
-                    write!(f, " *bv ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::And(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " and {}", t2)?;
-                } else {
-                    write!(f, " and ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::Less(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " < {}", t2)?;
-                } else {
-                    write!(f, " < ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::BVULT(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " u< {}", t2)?;
-                } else {
-                    write!(f, " u< ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::BVSLT(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " s< {}", t2)?;
-                } else {
-                    write!(f, " s< ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::BVSGT(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " s> {}", t2)?;
-                } else {
-                    write!(f, " s> ({})", t2)?;
-                }
-                Ok(())
-            }
-            TermX::Equal(t1, t2) => {
-                if t1.precedence() <= self.precedence() {
-                    write!(f, "{}", t1)?;
-                } else {
-                    write!(f, "({})", t1)?;
-                }
-                if t2.precedence() <= self.precedence() {
-                    write!(f, " = {}", t2)?;
-                } else {
-                    write!(f, " = ({})", t2)?;
-                }
-                Ok(())
-            }
+            TermX::Add(t1, t2) => term_op_format!(self, f, "+", t1, t2),
+            TermX::BVAdd(t1, t2) => term_op_format!(self, f, "+bv", t1, t2),
+            TermX::BVSub(t1, t2) => term_op_format!(self, f, "-bv", t1, t2),
+            TermX::Mul(t1, t2) => term_op_format!(self, f, "*", t1, t2),
+            TermX::BVMul(t1, t2) => term_op_format!(self, f, "*bv", t1, t2),
+            TermX::And(t1, t2) => term_op_format!(self, f, "and", t1, t2),
+            TermX::Less(t1, t2) => term_op_format!(self, f, "<", t1, t2),
+            TermX::BVULT(t1, t2) => term_op_format!(self, f, "u<", t1, t2),
+            TermX::BVUGT(t1, t2) => term_op_format!(self, f, "u>", t1, t2),
+            TermX::BVULE(t1, t2) => term_op_format!(self, f, "u<=", t1, t2),
+            TermX::BVUGE(t1, t2) => term_op_format!(self, f, "u>=", t1, t2),
+            TermX::BVSLT(t1, t2) => term_op_format!(self, f, "s<", t1, t2),
+            TermX::BVSGT(t1, t2) => term_op_format!(self, f, "s>", t1, t2),
+            TermX::BVSLE(t1, t2) => term_op_format!(self, f, "s<=", t1, t2),
+            TermX::BVSGE(t1, t2) => term_op_format!(self, f, "s>=", t1, t2),
+            TermX::BVSHL(t1, t2) => term_op_format!(self, f, "<<", t1, t2),
+            TermX::BVASHR(t1, t2) => term_op_format!(self, f, "a>>", t1, t2),
+            TermX::BVLSHR(t1, t2) => term_op_format!(self, f, "l>>", t1, t2),
+            TermX::BVAnd(t1, t2) => term_op_format!(self, f, "bvand", t1, t2),
+            TermX::BVOr(t1, t2) => term_op_format!(self, f, "bvor", t1, t2),
+            TermX::BVXor(t1, t2) => term_op_format!(self, f, "bvxor", t1, t2),
+            TermX::Equal(t1, t2) => term_op_format!(self, f, "=", t1, t2),
             TermX::Not(t) => {
                 if t.precedence() <= self.precedence() {
                     write!(f, "not {}", t)?;

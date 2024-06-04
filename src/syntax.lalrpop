@@ -140,6 +140,14 @@ Term: Term = {
     <start:@L> <t1:Term> "+" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Add(t1, t2)),
     #[assoc(side="left")]
     <start:@L> <t1:Term> "+bv" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVAdd(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "-bv" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSub(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "<<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSHL(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "a>>" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVASHR(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "l>>" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVLSHR(t1, t2)),
 
     #[precedence(level = "3")]
     #[assoc(side="left")]
@@ -147,9 +155,27 @@ Term: Term = {
     #[assoc(side="left")]
     <start:@L> <t1:Term> "u<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVULT(t1, t2)),
     #[assoc(side="left")]
+    <start:@L> <t1:Term> "u>" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVUGT(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "u<=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVULE(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "u>=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVUGE(t1, t2)),
+    #[assoc(side="left")]
     <start:@L> <t1:Term> "s<" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSLT(t1, t2)),
     #[assoc(side="left")]
+    <start:@L> <t1:Term> "s>" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSGT(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "s<=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSLE(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "s>=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVSGE(t1, t2)),
+    #[assoc(side="left")]
     <start:@L> <t1:Term> "=" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Equal(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "bvand" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVAnd(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "bvor" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVOr(t1, t2)),
+    #[assoc(side="left")]
+    <start:@L> <t1:Term> "bvxor" <t2:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::BVXor(t1, t2)),
 
     #[precedence(level = "4")]
     <start:@L> "not" <t:Term> <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, TermX::Not(t)),

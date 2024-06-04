@@ -139,6 +139,7 @@ impl ChannelX {
 pub enum OperatorKind {
     Id,
     Add,
+    Sub,
     Mul,
     ULT,
     SLT,
@@ -188,6 +189,7 @@ impl OperatorKind {
         match raw.op.as_str() {
             "ARITH_CFG_OP_ID" => Ok(OperatorKind::Id),
             "ARITH_CFG_OP_ADD" => Ok(OperatorKind::Add),
+            "ARITH_CFG_OP_SUB" => Ok(OperatorKind::Sub),
             "MUL_CFG_OP_MUL" => Ok(OperatorKind::Mul),
             "ARITH_CFG_OP_ULT" => Ok(OperatorKind::ULT),
             "ARITH_CFG_OP_SLT" => Ok(OperatorKind::SLT),
@@ -641,6 +643,7 @@ impl Graph {
         for op in &self.ops {
             match op.kind {
                 OperatorKind::Add
+                | OperatorKind::Sub
                 | OperatorKind::Mul
                 | OperatorKind::ULT
                 | OperatorKind::SLT
@@ -888,6 +891,15 @@ impl Graph {
                     recv a <= port 0;
                     recv b <= port 1;
                     send TermX::bvadd(TermX::var("a"), TermX::var("b")) => port 0;
+                    call name;
+            })?,
+
+            OperatorKind::Sub => ctx.add_proc(&riptide! {
+                (opts, op)
+                proc name; res =>
+                    recv a <= port 0;
+                    recv b <= port 1;
+                    send TermX::bvsub(TermX::var("a"), TermX::var("b")) => port 0;
                     call name;
             })?,
 
@@ -1272,6 +1284,7 @@ impl fmt::Display for OperatorKind {
         match self {
             OperatorKind::Id => write!(f, "Id"),
             OperatorKind::Add => write!(f, "Add"),
+            OperatorKind::Sub => write!(f, "Sub"),
             OperatorKind::Mul => write!(f, "Mul"),
             OperatorKind::ULT => write!(f, "ULT"),
             OperatorKind::SLT => write!(f, "SLT"),

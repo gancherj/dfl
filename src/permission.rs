@@ -115,11 +115,39 @@ impl TermX {
 
                 Ok(smt::TermX::bvadd(t1_smt, t2_smt))
             }
-            TermX::Mul(t1, t2) => Ok(smt::TermX::mul(
+            TermX::BVSub(t1, t2) => Ok(smt::TermX::bvsub(
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVMul(t1, t2) => Ok(smt::TermX::bvmul(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVSHL(t1, t2) => Ok(smt::TermX::bvshl(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVASHR(t1, t2) => Ok(smt::TermX::bvashr(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVLSHR(t1, t2) => Ok(smt::TermX::bvlshr(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVAnd(t1, t2) => Ok(smt::TermX::bvand(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVOr(t1, t2) => Ok(smt::TermX::bvor(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVXor(t1, t2) => Ok(smt::TermX::bvxor(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::Mul(t1, t2) => Ok(smt::TermX::mul(
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
@@ -131,11 +159,31 @@ impl TermX {
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
+            TermX::BVUGT(t1, t2) => Ok(smt::TermX::bvugt(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVULE(t1, t2) => Ok(smt::TermX::bvule(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVUGE(t1, t2) => Ok(smt::TermX::bvuge(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
             TermX::BVSLT(t1, t2) => Ok(smt::TermX::bvslt(
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
             TermX::BVSGT(t1, t2) => Ok(smt::TermX::bvsgt(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVSLE(t1, t2) => Ok(smt::TermX::bvsle(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+            )),
+            TermX::BVSGE(t1, t2) => Ok(smt::TermX::bvsge(
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),

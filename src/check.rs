@@ -570,7 +570,15 @@ impl TermX {
                     SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
                 }
             }
-            TermX::BVAdd(t1, t2) | TermX::BVMul(t1, t2) => {
+            TermX::BVAdd(t1, t2)
+            | TermX::BVSub(t1, t2)
+            | TermX::BVMul(t1, t2)
+            | TermX::BVSHL(t1, t2)
+            | TermX::BVASHR(t1, t2)
+            | TermX::BVLSHR(t1, t2)
+            | TermX::BVAnd(t1, t2)
+            | TermX::BVOr(t1, t2)
+            | TermX::BVXor(t1, t2)  => {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;
                 if typ1 == typ2 && typ1.is_bv() {
@@ -588,7 +596,14 @@ impl TermX {
                     SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
                 }
             }
-            TermX::BVULT(t1, t2) | TermX::BVSLT(t1, t2) | TermX::BVSGT(t1, t2) => {
+            TermX::BVULT(t1, t2)
+            | TermX::BVUGT(t1, t2)
+            | TermX::BVULE(t1, t2)
+            | TermX::BVUGE(t1, t2)
+            | TermX::BVSLT(t1, t2)
+            | TermX::BVSGT(t1, t2)
+            | TermX::BVSLE(t1, t2)
+            | TermX::BVSGE(t1, t2) => {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;
                 if typ1 == typ2 && typ1.is_bv() {
