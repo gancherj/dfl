@@ -387,7 +387,7 @@ impl Ctx {
     pub fn const_substitution(&self) -> IndexMap<Var, Term> {
         self.consts
             .keys()
-            .map(|c| (c.into(), TermX::var(c)))
+            .map(|c| (c.into(), TermX::constant(c)))
             .collect()
     }
 
