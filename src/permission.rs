@@ -57,9 +57,9 @@ impl Ctx {
 impl BaseType {
     pub fn as_smt_sort(&self) -> smt::Sort {
         match self {
-            BaseType::Bool => smt::Sort::Bool,
-            BaseType::Int => smt::Sort::Int,
-            BaseType::BitVec(w) => smt::Sort::BitVec(*w),
+            BaseType::Bool => smt::SortX::bool(),
+            BaseType::Int => smt::SortX::int(),
+            BaseType::BitVec(w) => smt::SortX::bit_vec(*w),
         }
     }
 }
@@ -475,7 +475,7 @@ impl Interpretation {
         if options.use_ite {
             symbols.push(smt::NonTerminal::new(
                 "Start",
-                smt::Sort::Bool,
+                smt::SortX::bool(),
                 [
                     smt::TermX::var("StartAtom"),
                     smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
@@ -489,7 +489,7 @@ impl Interpretation {
         } else {
             symbols.push(smt::NonTerminal::new(
                 "Start",
-                smt::Sort::Bool,
+                smt::SortX::bool(),
                 [
                     smt::TermX::var("StartAtom"),
                     smt::TermX::or([smt::TermX::var("Start"), smt::TermX::var("StartAtom")]),
@@ -516,14 +516,14 @@ impl Interpretation {
         }
         symbols.push(smt::NonTerminal::new(
             "StartAtom",
-            smt::Sort::Bool,
+            smt::SortX::bool(),
             &atomic_rules,
         ));
 
         // Fraction ::= read 0 | read 1 | ... | read n | write (n + 1) | write 0
         symbols.push(smt::NonTerminal::new(
             "Fraction",
-            smt::Sort::Bool,
+            smt::SortX::bool(),
             // Add all fractions: read(0), read(1), ..., read(num_frac - 2), write(num_frac - 1)
             (0..options.num_fractions)
                 .map(|f| {
@@ -568,7 +568,7 @@ impl Interpretation {
 
                 symbols.push(smt::NonTerminal::new(
                     format!("ArrayIndex_{}_{}", i, j),
-                    smt::Sort::Bool,
+                    smt::SortX::bool(),
                     if options.array_slices {
                         match base {
                             BaseType::Int => vec![
@@ -616,7 +616,7 @@ impl Interpretation {
         for width in &used_widths {
             symbols.push(smt::NonTerminal::new(
                 format!("ConstantBV{}", width),
-                smt::Sort::BitVec(*width),
+                smt::SortX::bit_vec(*width),
                 [
                     smt::TermX::bit_vec(0, *width),
                     smt::TermX::bvadd(
@@ -627,7 +627,7 @@ impl Interpretation {
             ));
             symbols.push(smt::NonTerminal::new(
                 format!("TermBV{}", width),
-                smt::Sort::BitVec(*width),
+                smt::SortX::bit_vec(*width),
                 // Only add dependent variables of type bv{width}
                 perm_decl
                     .param_typs
@@ -654,7 +654,7 @@ impl Interpretation {
         symbols.extend([
             smt::NonTerminal::new(
                 "ConstantInt",
-                smt::Sort::Int,
+                smt::SortX::int(),
                 [
                     smt::TermX::int(0),
                     smt::TermX::add(smt::TermX::var("ConstantInt"), smt::TermX::int(1)),
@@ -662,7 +662,7 @@ impl Interpretation {
             ),
             smt::NonTerminal::new(
                 "TermInt",
-                smt::Sort::Int,
+                smt::SortX::int(),
                 // Only add dependent variables of type int
                 perm_decl
                     .param_typs
@@ -679,7 +679,7 @@ impl Interpretation {
             ),
             smt::NonTerminal::new(
                 "TermBool",
-                smt::Sort::Bool,
+                smt::SortX::bool(),
                 // Only add dependent variables of type bool
                 perm_decl
                     .param_typs
@@ -750,8 +750,8 @@ impl Interpretation {
             consts: IndexMap::new(),
             vars: IndexMap::new(),
             perms: IndexMap::new(),
-            mut_idx: smt::TermX::var(fresh_universal_var("mut_idx".to_string(), smt::Sort::Int)),
-            frac_idx: smt::TermX::var(fresh_universal_var("frac_idx".to_string(), smt::Sort::Int)),
+            mut_idx: smt::TermX::var(fresh_universal_var("mut_idx".to_string(), smt::SortX::int())),
+            frac_idx: smt::TermX::var(fresh_universal_var("frac_idx".to_string(), smt::SortX::int())),
             arr_indices: arr_indices,
 
             constraints: Vec::new(),
@@ -816,8 +816,8 @@ impl Interpretation {
                     .map(|t| t.as_smt_sort())
                     .enumerate()
                     .map(|(i, t)| (format!("x{}", i), t))
-                    .chain([("mut_idx".to_string(), smt::Sort::Int)])
-                    .chain([("frac_idx".to_string(), smt::Sort::Int)])
+                    .chain([("mut_idx".to_string(), smt::SortX::int())])
+                    .chain([("frac_idx".to_string(), smt::SortX::int())])
                     .chain(arr_indices_names);
 
                 let grammar = if options.perm_grammar {
@@ -829,7 +829,7 @@ impl Interpretation {
                 let fresh_rel = smt_ctx.fresh_synth_fun(
                     format!("pv_{}", decl.name),
                     inputs,
-                    smt::Sort::Bool,
+                    smt::SortX::bool(),
                     (&grammar).as_ref(),
                 );
 
@@ -848,24 +848,24 @@ impl PermJudgmentX {
         vec![
             smt::CommandX::define_fun(
                 "arr_index",
-                [("i", smt::Sort::Int), ("arr_idx", smt::Sort::Int)],
-                smt::Sort::Bool,
+                [("i", smt::SortX::int()), ("arr_idx", smt::SortX::int())],
+                smt::SortX::bool(),
                 smt::TermX::eq(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
             ),
             smt::CommandX::define_fun(
                 "arr_from",
-                [("i", smt::Sort::Int), ("arr_idx", smt::Sort::Int)],
-                smt::Sort::Bool,
+                [("i", smt::SortX::int()), ("arr_idx", smt::SortX::int())],
+                smt::SortX::bool(),
                 smt::TermX::le(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
             ),
             smt::CommandX::define_fun(
                 "arr_range",
                 [
-                    ("i", smt::Sort::Int),
-                    ("j", smt::Sort::Int),
-                    ("arr_idx", smt::Sort::Int),
+                    ("i", smt::SortX::int()),
+                    ("j", smt::SortX::int()),
+                    ("arr_idx", smt::SortX::int()),
                 ],
-                smt::Sort::Bool,
+                smt::SortX::bool(),
                 smt::TermX::and([
                     smt::TermX::le(smt::TermX::var("i"), smt::TermX::var("arr_idx")),
                     smt::TermX::gt(smt::TermX::var("j"), smt::TermX::var("arr_idx")),
@@ -873,14 +873,14 @@ impl PermJudgmentX {
             ),
             smt::CommandX::define_fun(
                 "frac_read",
-                [("f", smt::Sort::Int), ("frac_idx", smt::Sort::Int)],
-                smt::Sort::Bool,
+                [("f", smt::SortX::int()), ("frac_idx", smt::SortX::int())],
+                smt::SortX::bool(),
                 smt::TermX::eq(smt::TermX::var("f"), smt::TermX::var("frac_idx")),
             ),
             smt::CommandX::define_fun(
                 "frac_write",
-                [("f", smt::Sort::Int), ("frac_idx", smt::Sort::Int)],
-                smt::Sort::Bool,
+                [("f", smt::SortX::int()), ("frac_idx", smt::SortX::int())],
+                smt::SortX::bool(),
                 smt::TermX::le(smt::TermX::var("f"), smt::TermX::var("frac_idx")),
             ),
         ]
@@ -920,7 +920,7 @@ impl PermJudgmentX {
             .send_command(smt::CommandX::synth_fun(
                 "dummy",
                 empty_sorts,
-                smt::Sort::Bool,
+                smt::SortX::bool(),
                 None,
             ))
             .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
@@ -1135,7 +1135,7 @@ impl PermConstraintX {
                 let frac_idx = &smt::TermX::var(frac_idx_name);
 
                 Ok(smt::TermX::forall(
-                    [(frac_idx_name, smt::Sort::Int)],
+                    [(frac_idx_name, smt::SortX::int())],
                     smt::TermX::implies(
                         // 0 <= frac_idx
                         smt::TermX::le(smt::TermX::int(0), frac_idx),

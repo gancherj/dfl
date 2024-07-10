@@ -14,11 +14,13 @@ use wait_timeout::ChildExt;
 
 use crate::BitVecWidth;
 
+pub type Sort = Rc<SortX>;
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub enum Sort {
+pub enum SortX {
     Int,
     Bool,
     BitVec(BitVecWidth),
+    Array(Sort, Sort),
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -256,6 +258,24 @@ impl<T: AsRef<str>> From<T> for Ident {
 impl From<&Ident> for Ident {
     fn from(id: &Ident) -> Ident {
         id.clone()
+    }
+}
+
+impl SortX {
+    pub fn int() -> Sort {
+        Rc::new(SortX::Int)
+    }
+
+    pub fn bool() -> Sort {
+        Rc::new(SortX::Bool)
+    }
+
+    pub fn bit_vec(w: BitVecWidth) -> Sort {
+        Rc::new(SortX::BitVec(w))
+    }
+
+    pub fn array(idx: impl Borrow<Sort>, value: impl Borrow<Sort>) -> Sort {
+        Rc::new(SortX::Array(idx.borrow().clone(), value.borrow().clone()))
     }
 }
 
@@ -731,12 +751,13 @@ impl fmt::Display for Ident {
     }
 }
 
-impl fmt::Display for Sort {
+impl fmt::Display for SortX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Sort::Int => write!(f, "Int"),
-            Sort::Bool => write!(f, "Bool"),
-            Sort::BitVec(width) => write!(f, "(_ BitVec {})", width),
+            SortX::Int => write!(f, "Int"),
+            SortX::Bool => write!(f, "Bool"),
+            SortX::BitVec(width) => write!(f, "(_ BitVec {})", width),
+            SortX::Array(idx, value) => write!(f, "(Array {} {})", idx, value),
         }
     }
 }

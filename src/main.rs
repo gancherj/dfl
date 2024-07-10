@@ -11,15 +11,17 @@ pub mod permission;
 pub mod riptide;
 pub mod smt;
 pub mod span;
+pub mod execution;
 
 use crate::error::Error;
 use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
+use crate::execution::Configuration;
 
 use clap::{command, Parser};
 use error::SpannedError;
 use lalrpop_util::lalrpop_mod;
 use riptide::TranslationOptions;
-use smt::SolverOptions;
+use smt::{EncodingCtx, SolverOptions};
 use span::{FilePath, Source};
 
 lalrpop_mod!(pub syntax);
@@ -101,6 +103,9 @@ fn type_check(mut args: Args) -> Result<(), Error> {
 
         _ => Err(format!("unknown extension {}", path))?,
     };
+
+    let mut smt_ctx = EncodingCtx::new("exec");
+    println!("init config: {:?}", Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?);
 
     if args.check_perm && args.infer_perm {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;
