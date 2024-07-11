@@ -1,0 +1,6 @@
+
+chan C: int
+
+proc Test() | all = send 1 -> C
+
+proc Program() | all = Test()

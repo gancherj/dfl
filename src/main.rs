@@ -3,6 +3,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::{fs, io::BufReader};
+use std::rc::Rc;
 
 pub mod ast;
 pub mod check;
@@ -84,7 +85,7 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             let program = syntax::ProgramParser::new()
                 .parse(&path, &src, src.as_str())
                 .map_err(|e| SpannedError::from_parse_error(&path, &src, e))?;
-            Ctx::from(&program)?
+            Rc::new(Ctx::from(&program)?)
         }
 
         // Translate from RipTide dataflow graph
@@ -98,14 +99,18 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             let program: Program = (&ctx).into();
 
             println!("{}", program);
-            ctx
+            Rc::new(ctx)
         }
 
         _ => Err(format!("unknown extension {}", path))?,
     };
 
+    // TODO: test code for symbolic execution
     let mut smt_ctx = EncodingCtx::new("exec");
-    println!("init config: {:?}", Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?);
+    let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
+    println!("init config: {:?}", config);
+    println!("stepped: {:?}", config.step_one_proc());
+
 
     if args.check_perm && args.infer_perm {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;

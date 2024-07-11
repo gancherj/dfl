@@ -474,6 +474,14 @@ impl TermX {
             body.borrow().clone(),
         ))
     }
+
+    pub fn select(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("select", [a.borrow(), b.borrow()])
+    }
+
+    pub fn store(a: impl Borrow<Term>, b: impl Borrow<Term>, c: impl Borrow<Term>) -> Term {
+        TermX::app("store", [a.borrow(), b.borrow(), c.borrow()])
+    }
 }
 
 impl CommandX {
