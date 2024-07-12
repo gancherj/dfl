@@ -1,4 +1,6 @@
+use im::HashMap;
 use im::HashSet;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Borrow;
 use std::ffi::OsStr;
 use std::fmt;
@@ -13,6 +15,7 @@ use std::time::Duration;
 use wait_timeout::ChildExt;
 
 use crate::BitVecWidth;
+use crate::error::SolverError;
 
 pub type Sort = Rc<SortX>;
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -26,20 +29,20 @@ pub enum SortX {
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct Ident(pub Rc<str>);
 
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(Eq, PartialEq, Clone, Debug, Copy)]
 pub enum QuantKind {
     Forall,
     Exists,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SortedVar {
     pub name: Ident,
     pub sort: Sort,
 }
 
 pub type Term = Rc<TermX>;
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TermX {
     Var(Ident),
     Int(u64),
@@ -145,7 +148,7 @@ pub struct Solver {
 pub struct EncodingCtx {
     prefix: String,
     fresh_var_count: u64,
-    commands: Vec<Command>,
+    decls: IndexMap<Ident, Command>,
     used_names: HashSet<Ident>,
 }
 
@@ -154,7 +157,7 @@ impl EncodingCtx {
         EncodingCtx {
             prefix: prefix.into(),
             fresh_var_count: 0,
-            commands: Vec::new(),
+            decls: IndexMap::new(),
             used_names: HashSet::new(),
         }
     }
@@ -193,13 +196,13 @@ impl EncodingCtx {
 
     pub fn fresh_const(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.commands.push(CommandX::declare_const(&name, sort));
+        self.decls.insert(name.clone(), CommandX::declare_const(&name, sort));
         name
     }
 
     pub fn fresh_var(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.commands.push(CommandX::declare_var(&name, sort));
+        self.decls.insert(name.clone(), CommandX::declare_var(&name, sort));
         name
     }
 
@@ -210,8 +213,7 @@ impl EncodingCtx {
         sort: Sort,
     ) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.commands
-            .push(CommandX::declare_fun(&name, inputs, sort));
+        self.decls.insert(name.clone(), CommandX::declare_fun(&name, inputs, sort));
         name
     }
 
@@ -224,13 +226,12 @@ impl EncodingCtx {
         grammar: Option<&SynthFunGrammar>,
     ) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.commands
-            .push(CommandX::synth_fun(&name, inputs, sort, grammar));
+        self.decls.insert(name.clone(), CommandX::synth_fun(&name, inputs, sort, grammar));
         name
     }
 
-    pub fn to_commands(&self) -> &Vec<Command> {
-        &self.commands
+    pub fn to_commands(&self) -> impl Iterator<Item=&Command> {
+        self.decls.values()
     }
 }
 
@@ -280,6 +281,15 @@ impl SortX {
 }
 
 impl TermX {
+    pub fn is_literal(&self) -> bool {
+        match self {
+            TermX::Int(..) => true,
+            TermX::BitVec(..) => true,
+            TermX::Bool(..) => true,
+            _ => false,
+        }
+    }
+
     pub fn int(i: u64) -> Term {
         Rc::new(TermX::Int(i))
     }
@@ -294,6 +304,13 @@ impl TermX {
 
     pub fn var(id: impl Into<Ident>) -> Term {
         Rc::new(TermX::Var(id.into()))
+    }
+
+    pub fn as_var(&self) -> Option<Ident> {
+        match self {
+            TermX::Var(id) => Some(id.clone()),
+            _ => None,
+        }
     }
 
     pub fn app(id: impl Into<Ident>, args: impl IntoIterator<Item = impl Borrow<Term>>) -> Term {
@@ -482,6 +499,51 @@ impl TermX {
     pub fn store(a: impl Borrow<Term>, b: impl Borrow<Term>, c: impl Borrow<Term>) -> Term {
         TermX::app("store", [a.borrow(), b.borrow(), c.borrow()])
     }
+
+    /**
+     * TODO: this does not consider variable capturing
+     */
+    fn substitute_inplace(term: &Term, subst: &HashMap<Ident, Term>) -> Option<Term> {
+        match term.borrow() {
+            TermX::Var(id) => subst.get(id).cloned(),
+            TermX::Int(..) => None,
+            TermX::BitVec(..) => None,
+            TermX::Bool(..) => None,
+            TermX::App(f, args) => {
+                let subst_f = TermX::substitute_inplace(f, subst);
+                let subst_args = args
+                    .iter()
+                    .map(|arg| TermX::substitute_inplace(arg, subst))
+                    .collect::<Vec<_>>();
+                if subst_f.is_some() || subst_args.iter().any(|arg| arg.is_some()) {
+                    Some(TermX::app_term(
+                        subst_f.unwrap_or(f.clone()),
+                        subst_args.into_iter()
+                            .enumerate()
+                            .map(|(i, arg)| arg.unwrap_or(args[i].clone()))
+                    ))
+                } else {
+                    None
+                }
+            },
+            TermX::Quant(quant, vars, body) => {
+                let subst_body = TermX::substitute_inplace(body, subst);
+                if subst_body.is_some() {
+                    Some(Rc::new(TermX::Quant(
+                        *quant,
+                        vars.iter().cloned().collect(),
+                        subst_body.unwrap(),
+                    )))
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    pub fn substitute(term: impl Borrow<Term>, subst: &HashMap<Ident, Term>) -> Term {
+        TermX::substitute_inplace(term.borrow(), subst).unwrap_or(term.borrow().clone())
+    }
 }
 
 impl CommandX {
@@ -608,10 +670,12 @@ pub struct SolverOptions {
     pub log: Option<BufWriter<File>>,
 }
 
+pub type SolverResult<T> = Result<T, SolverError>;
+
 impl Solver {
     const WAIT_TIMEOUT: u64 = 5;
 
-    pub fn new<T: AsRef<OsStr>>(cmd: T, args: &[T], options: SolverOptions) -> io::Result<Solver> {
+    pub fn new<T: AsRef<OsStr>>(cmd: T, args: &[T], options: SolverOptions) -> SolverResult<Solver> {
         let mut process = process::Command::new(cmd)
             .args(args)
             .stdin(process::Stdio::piped())
@@ -637,7 +701,7 @@ impl Solver {
 
     /// Close a solver process first by sending (exit)
     /// Then kill it if it fails to respond in WAIT_TIMEOUT seconds
-    pub fn close(&mut self) -> io::Result<process::ExitStatus> {
+    pub fn close(&mut self) -> SolverResult<process::ExitStatus> {
         self.send_command(CommandX::exit())?;
 
         // Wait for Solver::WAIT_TIMEOUT seconds before killing the process
@@ -648,22 +712,23 @@ impl Solver {
             Some(status) => Ok(status),
             None => {
                 self.process.kill()?;
-                self.process.wait()
+                Ok(self.process.wait()?)
             }
         }
     }
 
-    pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> io::Result<()> {
+    pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> SolverResult<()> {
         if let Some(log) = &mut self.options.log {
             writeln!(log, "{}", cmd.borrow())?;
             log.flush()?;
         }
-        writeln!(self.stdin, "{}", cmd.borrow())
+        writeln!(self.stdin, "{}", cmd.borrow())?;
+        Ok(())
     }
 
     /// Send a command then wait to read output from the solver
     /// The output is expected to be a single S-expression
-    pub fn send_command_with_output(&mut self, cmd: impl Borrow<Command>) -> io::Result<String> {
+    pub fn send_command_with_output(&mut self, cmd: impl Borrow<Command>) -> SolverResult<String> {
         self.send_command(cmd)?;
 
         let mut output = String::new();
@@ -682,7 +747,7 @@ impl Solver {
                     num_open_paren += 1;
                 } else if c == ')' {
                     if num_open_paren == 0 {
-                        return Err(io::Error::other("unmatched closing parenthesis"));
+                        Err(io::Error::other("unmatched closing parenthesis"))?
                     }
                     num_open_paren -= 1;
                 }
@@ -699,35 +764,35 @@ impl Solver {
     pub fn set_option(
         &mut self,
         option: impl IntoIterator<Item = impl Into<String>>,
-    ) -> io::Result<()> {
+    ) -> SolverResult<()> {
         self.send_command(CommandX::set_option(option))
     }
 
-    pub fn set_logic(&mut self, logic: impl Into<String>) -> io::Result<()> {
+    pub fn set_logic(&mut self, logic: impl Into<String>) -> SolverResult<()> {
         self.send_command(CommandX::set_logic(logic))
     }
 
-    pub fn assert(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
+    pub fn assert(&mut self, term: impl Borrow<Term>) -> SolverResult<()> {
         self.send_command(CommandX::assert(term))
     }
 
-    pub fn assume(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
+    pub fn assume(&mut self, term: impl Borrow<Term>) -> SolverResult<()> {
         self.send_command(CommandX::assume(term))
     }
 
-    pub fn constraint(&mut self, term: impl Borrow<Term>) -> io::Result<()> {
+    pub fn constraint(&mut self, term: impl Borrow<Term>) -> SolverResult<()> {
         self.send_command(CommandX::constraint(term))
     }
 
-    pub fn push(&mut self) -> io::Result<()> {
+    pub fn push(&mut self) -> SolverResult<()> {
         self.send_command(CommandX::push())
     }
 
-    pub fn pop(&mut self) -> io::Result<()> {
+    pub fn pop(&mut self) -> SolverResult<()> {
         self.send_command(CommandX::pop())
     }
 
-    pub fn check_synth(&mut self) -> io::Result<CheckSynthResult> {
+    pub fn check_synth(&mut self) -> SolverResult<CheckSynthResult> {
         let output = self.send_command_with_output(CommandX::check_synth())?;
 
         match output.trim() {
@@ -737,7 +802,7 @@ impl Solver {
         }
     }
 
-    pub fn check_sat(&mut self) -> io::Result<CheckSatResult> {
+    pub fn check_sat(&mut self) -> SolverResult<CheckSatResult> {
         let output = self.send_command_with_output(CommandX::check_sat())?;
 
         match output.trim() {
@@ -747,7 +812,7 @@ impl Solver {
             _ => Err(io::Error::other(format!(
                 "unexpected solver check-sat output: {}",
                 output
-            ))),
+            )))?,
         }
     }
 }

@@ -1,5 +1,5 @@
-use std::hash::Hash;
 use std::rc::Rc;
+use std::fmt;
 
 use im::{Vector, vector, HashMap};
 
@@ -35,11 +35,11 @@ pub struct Configuration {
     pub muts: HashMap<MutName, smt::Term>,
     pub chans: HashMap<ChanName, ChanState>,
     pub procs: Vector<ProcState>,
-    pub path_condition: Vector<smt::Term>,
+    pub path_conditions: Vector<smt::Term>,
 }
 
 #[derive(Debug, Clone)]
-pub enum EvalResult {
+enum ProcEvalResult {
     // Process is blocked, and the remaining process term is returned
     Partial(Proc, Configuration),
 
@@ -73,6 +73,10 @@ impl ChanState {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
     pub fn pop(&mut self) -> Option<smt::Term> {
         self.queue.pop_front()
     }
@@ -84,6 +88,10 @@ impl ChanState {
             self.queue.push_back(value);
             true
         }
+    }
+
+    pub fn values(&self) -> impl Iterator<Item=&smt::Term> {
+        self.queue.iter()
     }
 }
 
@@ -150,7 +158,7 @@ impl Configuration {
             muts,
             chans,
             procs: Vector::new(),
-            path_condition: Vector::new(),
+            path_conditions: Vector::new(),
         };
 
         config.procs = config.decompose_parallels(&entry_proc.body)?;
@@ -348,9 +356,9 @@ impl Configuration {
      * - Blocked recv/send
      * (without checking feasibility of path conditions)
      */
-    fn eval_proc(mut self, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<EvalResult>, Error> {
+    fn eval_proc(mut self, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
         match &proc.x {
-            ProcX::Skip => Ok(vector![EvalResult::End(self)]),
+            ProcX::Skip => Ok(vector![ProcEvalResult::End(self)]),
 
             ProcX::Send(name, term, cont) => {
                 let value = self.eval_term(local, term)?;
@@ -359,14 +367,14 @@ impl Configuration {
                     Ok(self.eval_proc(local, cont)?)
                 } else {
                     // Blocked
-                    Ok(vector![EvalResult::Partial(proc.clone(), self)])
+                    Ok(vector![ProcEvalResult::Partial(proc.clone(), self)])
                 }
             },
 
             ProcX::Recv(name, var, cont) => {
                 let chan = self.chans.get_mut(name).ok_or(format!("channel {} not found", name))?;
                 match chan.pop() {
-                    None => Ok(vector![EvalResult::Partial(proc.clone(), self)]),
+                    None => Ok(vector![ProcEvalResult::Partial(proc.clone(), self)]),
                     Some(value) => {
                         local.insert(var.clone(), value);
                         Ok(self.eval_proc(local, cont)?)
@@ -388,19 +396,34 @@ impl Configuration {
 
             ProcX::Ite(t, p1, p2) => {
                 let mut copy = self.clone();
-                self.path_condition.push_back(self.eval_term(local, t)?);
-                copy.path_condition.push_back(smt::TermX::not(self.eval_term(local, t)?));
+                self.path_conditions.push_back(self.eval_term(local, t)?);
+                copy.path_conditions.push_back(smt::TermX::not(self.eval_term(local, t)?));
                 Ok(self.eval_proc(local, p1)? + copy.eval_proc(local, p2)?)
             },
 
             ProcX::Call(name, args) =>
-                Ok(vector![EvalResult::Full(ProcState {
+                Ok(vector![ProcEvalResult::Full(ProcState {
                     name: name.clone(),
                     args: args.iter().map(|arg| self.eval_term(local, arg))
                         .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
                 }, self)]),
             ProcX::Par(..) => Err(format!("parallel composition only allowed at the top level"))?,
         }
+    }
+
+    /**
+     * Return true iff the path condition is satisfiable
+     */
+    pub fn feasible(&self, solver: &mut smt::Solver) -> Result<smt::CheckSatResult, Error> {
+        solver.push()?;
+
+        for condition in self.path_conditions.iter() {
+            solver.assert(condition)?;
+        }
+
+        let result = solver.check_sat()?;
+        solver.pop()?;
+        Ok(result)
     }
 
     /**
@@ -430,7 +453,7 @@ impl Configuration {
 
             // If the results are all partial, then none of the branches can make progress until a call
             // so we just move on to the next process while restoring the path conditions
-            if results.iter().all(|r| match r { EvalResult::Partial(..) => true, _ => false, }) {
+            if results.iter().all(|r| match r { ProcEvalResult::Partial(..) => true, _ => false, }) {
                 continue;
             }
 
@@ -438,9 +461,9 @@ impl Configuration {
             // of new path conditions in each partial branch
             let partial_condition = smt::TermX::or(
                 results.iter().filter_map(|r| match r {
-                    // Take the conjunction of all new path conditions (compared to config.path_condition)
-                    EvalResult::Partial(_, new_config) => Some(
-                        smt::TermX::and(new_config.path_condition.iter().skip(config.path_condition.len()))
+                    // Take the conjunction of all new path conditions (compared to config.path_conditions)
+                    ProcEvalResult::Partial(_, new_config) => Some(
+                        smt::TermX::and(new_config.path_conditions.iter().skip(config.path_conditions.len()))
                     ),
                     _ => None,
                 })
@@ -450,12 +473,12 @@ impl Configuration {
             let mut has_partial = false;
             for result in results {
                 match result {
-                    EvalResult::Full(new_proc_state, mut new_config) => {
+                    ProcEvalResult::Full(new_proc_state, mut new_config) => {
                         // Update process state
                         new_config.procs[i] = new_proc_state;
                         stepped_branches.push_back(StepResult::Step(proc_state.name.clone(), new_config));
                     },
-                    EvalResult::End(mut new_config) => {
+                    ProcEvalResult::End(mut new_config) => {
                         // Remove the process state as it has finished
                         new_config.procs.remove(i);
                         stepped_branches.push_back(StepResult::Step(proc_state.name.clone(), new_config));
@@ -477,10 +500,57 @@ impl Configuration {
                 stepped_branches.push_back(StepResult::Terminal(self.clone()));
             } else {
                 // Continue with the union of all partial branches
-                config.path_condition.push_back(partial_condition);
+                config.path_conditions.push_back(partial_condition);
             }
         }
 
         Ok(stepped_branches)
+    }
+}
+
+impl fmt::Display for ChanState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, value) in self.queue.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}", value)?;
+            } else {
+                write!(f, ", {}", value)?;
+            }
+        }
+        write!(f, "] (max {})", self.bound)
+    }
+}
+
+impl fmt::Display for Configuration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Configuration {{")?;
+
+        for (name, term) in self.consts.iter() {
+            writeln!(f, "  const {} => {},", name, term)?;
+        }
+
+        for (name, term) in self.muts.iter() {
+            writeln!(f, "  mut {} => {},", name, term)?;
+        }
+
+        for (name, state) in self.chans.iter() {
+            writeln!(f, "  chan {} => {},", name, state)?;
+        }
+
+        for condition in self.path_conditions.iter() {
+            writeln!(f, "  constraint {}", condition)?;
+        }
+
+        write!(f, "}}")
+    }
+}
+
+impl fmt::Display for StepResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            StepResult::Step(name, config) => write!(f, "Step({}, {})", name, config),
+            StepResult::Terminal(config) => write!(f, "Terminal({})", config),
+        }
     }
 }

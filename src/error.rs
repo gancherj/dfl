@@ -2,6 +2,7 @@ use lalrpop_util::ParseError;
 use std::fmt;
 use std::io;
 
+use crate::smt::Solver;
 use crate::span::FilePath;
 use crate::span::Source;
 use crate::span::Span;
@@ -10,22 +11,45 @@ use crate::span::Span;
 pub enum Error {
     IOError(io::Error),
     SpannedError(SpannedError),
+    SolverError(SolverError),
     OtherError(String),
 }
+
+#[derive(Debug)]
+pub struct SolverError(io::Error);
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::IOError(e) => write!(f, "{}", e),
             Error::SpannedError(e) => write!(f, "{}", e),
+            Error::SolverError(e) => write!(f, "{}", e),
             Error::OtherError(e) => write!(f, "{}", e),
         }
+    }
+}
+
+impl fmt::Display for SolverError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "solver error: {}", self.0)
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {
         Error::IOError(err)
+    }
+}
+
+impl From<io::Error> for SolverError {
+    fn from(err: io::Error) -> Self {
+        SolverError(err)
+    }
+}
+
+impl From<SolverError> for Error {
+    fn from(err: SolverError) -> Self {
+        Error::SolverError(err)
     }
 }
 
@@ -38,6 +62,12 @@ impl From<SpannedError> for Error {
 impl From<String> for Error {
     fn from(err: String) -> Self {
         Error::OtherError(err)
+    }
+}
+
+impl Error {
+    pub fn other<T>(msg: impl Into<String>) -> Result<T, Error> {
+        Err(Error::OtherError(msg.into()))
     }
 }
 

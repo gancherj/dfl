@@ -7,7 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use crate::{
     ast::*,
     check::LocalCtx,
-    error::SpannedError,
+    error::{SpannedError, Error},
     smt::{self, EncodingCtx, SynthFunGrammar},
     span::Spanned,
 };
@@ -893,7 +893,7 @@ impl PermJudgmentX {
         options: &PermInferOptions,
         ctx: &Ctx,
         solver: &mut smt::Solver,
-    ) -> Result<Option<smt::SynthModel>, SpannedError> {
+    ) -> Result<Option<smt::SynthModel>, Error> {
         let mut smt_ctx = EncodingCtx::new("perm");
         let mut smt_constraints = Vec::new();
 
@@ -909,62 +909,43 @@ impl PermJudgmentX {
         }
 
         // Send solver commands
-        solver
-            .push()
-            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+        solver.push()?;
 
         // Send a dummy synth-fun to enable feasibility checking even when there is no
         // permission variable
         let empty_sorts: Vec<(&str, _)> = vec![];
-        solver
-            .send_command(smt::CommandX::synth_fun(
-                "dummy",
-                empty_sorts,
-                smt::SortX::bool(),
-                None,
-            ))
-            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+        solver.send_command(smt::CommandX::synth_fun(
+            "dummy",
+            empty_sorts,
+            smt::SortX::bool(),
+            None,
+        ))?;
 
         for cmd in PermJudgmentX::generate_sygus_prelude() {
-            solver
-                .send_command(cmd)
-                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+            solver.send_command(cmd)?;
         }
 
         for cmd in smt_ctx.to_commands() {
-            solver
-                .send_command(cmd)
-                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+            solver.send_command(cmd)?;
         }
 
         for constraint in &interp.constraints {
-            solver
-                .assume(constraint)
-                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+            solver.assume(constraint)?;
         }
 
         for smt_constraint in smt_constraints {
-            solver
-                .constraint(smt_constraint)
-                .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
+            solver.constraint(smt_constraint)?;
         }
 
-        let result = match solver
-            .check_synth()
-            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?
-        {
+        let result = solver.check_synth()?;
+
+        solver.pop()?;
+
+        match solver.check_synth()? {
             smt::CheckSynthResult::Infeasible => Ok(None), // no solution possible
-            smt::CheckSynthResult::Fail => {
-                SpannedError::new_err(format!("solver failed to synthesize"))
-            }
+            smt::CheckSynthResult::Fail => Error::other(format!("solver failed to synthesize")),
             smt::CheckSynthResult::Synthesized(model) => Ok(Some(model)),
-        };
-
-        solver
-            .pop()
-            .map_err(|msg| SpannedError::new(format!("solver error: {}", msg)))?;
-
-        result
+        }
     }
 
     // Check the validity of a single judgments with no permission variables

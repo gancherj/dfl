@@ -6,7 +6,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::*;
-use crate::error::SpannedError;
+use crate::error::{SpannedError, Error};
 use crate::permission::*;
 use crate::smt;
 use crate::span::Spanned;
@@ -1147,7 +1147,7 @@ pub enum PermCheckMode {
 
 impl Ctx {
     /// Type-check everything in a context
-    pub fn type_check(&self, mode: &mut PermCheckMode) -> Result<(), SpannedError> {
+    pub fn type_check(&self, mode: &mut PermCheckMode) -> Result<(), Error> {
         // Mutables types are base types and are always correct
 
         for decl in self.muts.values() {
@@ -1200,7 +1200,7 @@ impl Ctx {
         if all_perm_valid {
             Ok(())
         } else {
-            SpannedError::new_err(format!("type checking failed"))
+            Error::other(format!("type checking failed"))
         }
     }
 }

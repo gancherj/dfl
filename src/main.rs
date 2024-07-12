@@ -13,6 +13,7 @@ pub mod riptide;
 pub mod smt;
 pub mod span;
 pub mod execution;
+pub mod mc;
 
 use crate::error::Error;
 use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
@@ -75,6 +76,17 @@ struct Args {
     log_smt: Option<String>,
 }
 
+fn dfs(config: &Configuration) -> Result<(), Error> {
+    for branch in config.step_one_proc()? {
+        println!("stepped: {}", branch);
+        match branch {
+            execution::StepResult::Step(_, config) => dfs(&config)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn type_check(mut args: Args) -> Result<(), Error> {
     let path: FilePath = args.source.into();
 
@@ -108,9 +120,8 @@ fn type_check(mut args: Args) -> Result<(), Error> {
     // TODO: test code for symbolic execution
     let mut smt_ctx = EncodingCtx::new("exec");
     let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
-    println!("init config: {:?}", config);
-    println!("stepped: {:?}", config.step_one_proc());
-
+    println!("init config: {}", config);
+    dfs(&config);
 
     if args.check_perm && args.infer_perm {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;
