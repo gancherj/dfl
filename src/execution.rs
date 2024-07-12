@@ -65,6 +65,15 @@ impl MutTypeX {
     }
 }
 
+impl TermTypeX {
+    pub fn as_smt_sort(&self) -> smt::Sort {
+        match self {
+            TermTypeX::Base(typ) => typ.as_smt_sort(),
+            TermTypeX::Ref(..) => unimplemented!("reference"),
+        }
+    }
+}
+
 impl ChanState {
     pub fn new(bound: usize) -> ChanState {
         ChanState {

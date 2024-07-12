@@ -1,3 +1,4 @@
+use core::fmt;
 use std::borrow::Borrow;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -35,9 +36,9 @@ pub struct ModelChecker {
 
     shapes: HashMap<Rc<Shape>, ShapeIndex>,
     index_to_shape: Vec<Rc<Shape>>,
+    changed_shapes: IndexSet<ShapeIndex>,
 
     abs: HashMap<ShapeIndex, ShapeAbstraction>,
-    changed_shapes: IndexSet<ShapeIndex>,
 }
 
 pub struct Subsumption {
@@ -129,13 +130,61 @@ impl ShapeAbstraction {
      * Extend an abstraction with more examples
      * Return true iff the abstraction needs to be weakened
      */
-    fn extend(&mut self, new_configs: Vec<Configuration>) -> Result<bool, Error> {
+    fn extend(&mut self, smt_ctx: &mut smt::EncodingCtx, solver: &mut smt::Solver, mut new_configs: Vec<Configuration>) -> Result<bool, Error> {
         // 1. Filter out infeasible new configs (|new_configs| queries)
         // 2. Learn (x == c) predicates at each variable (|size of shape| queries)
         // 3. Syntactically learn equalities between variables (0 queries)
         //    (incomplete, but still monotone)
 
-        todo!()
+        // Naive version
+        if self.pattern.is_none() {
+            let ctx = new_configs[0].ctx.clone();
+            let mut muts = im::HashMap::new();
+            let mut chans = im::HashMap::new();
+            let mut procs = Vector::new();
+
+            for decl in ctx.muts.values() {
+                let ident = smt_ctx.fresh_const(format!("shape_mut_{}", decl.name), decl.typ.as_smt_sort());
+                muts.insert(decl.name.clone(), smt::TermX::var(ident));
+            }
+
+            for (i, decl) in ctx.chans.values().enumerate() {
+                let bound = new_configs[0].chans[&decl.name].bound;
+                let mut state = ChanState::new(bound);
+
+                // Generate placeholders for each channel value
+                for j in 0..self.shape.chans[i] {
+                    let ident = smt_ctx.fresh_const(format!("shape_chan_{}_{}", decl.name, j), decl.typ.as_smt_sort());
+                    state.push(smt::TermX::var(ident));
+                }
+
+                chans.insert(decl.name.clone(), state);
+            }
+
+            for proc in &new_configs[0].procs {
+                let decl = ctx.procs.get(&proc.name).ok_or(format!("undefined process"))?;
+                // Generate fresh variables for each process parameter
+                let args = decl.params.iter()
+                    .map(|param| {
+                        let ident = smt_ctx.fresh_const(format!("shape_proc_param_{}", param.name), param.typ.as_smt_sort());
+                        smt::TermX::var(ident)
+                    })
+                    .collect();
+                procs.push_back(ProcState { name: proc.name.clone(), args });
+            }
+
+            self.pattern = Some(Configuration {
+                muts,
+                chans,
+                procs,
+                path_conditions: Vector::new(),
+                ..new_configs.remove(0)
+            });
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -157,8 +206,8 @@ impl ModelChecker {
             smt_ctx: smt::EncodingCtx::new("mc"),
             shapes: HashMap::new(),
             index_to_shape: Vec::new(),
-            abs: HashMap::new(),
             changed_shapes: IndexSet::new(),
+            abs: HashMap::new(),
         }
     }
 
@@ -186,14 +235,17 @@ impl ModelChecker {
      * If the abstraction changed due to the new examples
      * update changed_shape
      */
-    fn extend_shape(&mut self, shape_idx: ShapeIndex, configs: Vec<Configuration>) -> Result<(), Error> {
+    fn extend_shape(&mut self, solver: &mut smt::Solver, shape_idx: ShapeIndex, configs: Vec<Configuration>) -> Result<(), Error> {
         if !self.abs.contains_key(&shape_idx) {
             self.abs.insert(shape_idx, ShapeAbstraction::new(&self.index_to_shape[shape_idx]));
         }
 
-        if self.abs.get_mut(&shape_idx).unwrap().extend(configs)? {
+        let abs = self.abs.get_mut(&shape_idx).unwrap();
+        if abs.extend(&mut self.smt_ctx, solver, configs)? {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
+
+            println!("changed shape: {}", abs);
         }
 
         Ok(())
@@ -202,14 +254,16 @@ impl ModelChecker {
     /**
      * Initialize the shape abstraction based on the context
      */
-    pub fn abstract_shape(&mut self, entry: impl Into<ProcName>, chan_bound: usize) -> Result<(), Error> {
+    pub fn abstract_shape(&mut self, solver: &mut smt::Solver, entry: impl Into<ProcName>, chan_bound: usize) -> Result<(), Error> {
         // Add the initial configuration
         let init_config = Configuration::new(&mut self.smt_ctx, &self.ctx, entry, chan_bound)?;
         let init_shape_idx = self.get_shape_index(&init_config)?;
-        self.extend_shape(init_shape_idx, vec![init_config])?;
+        self.extend_shape(solver, init_shape_idx, vec![init_config])?;
 
         // Iterate until no more changes in the shape abstraction
         while self.changed_shapes.len() > 0 {
+            println!("all shapes: {}, changed shapes: {}", self.abs.len(), self.changed_shapes.len());
+
             // Pop all changed shapes
             let old_changed_shapes = self.changed_shapes.iter().cloned().collect::<Vec<_>>();
             self.changed_shapes.clear();
@@ -239,10 +293,25 @@ impl ModelChecker {
 
             // Add new configurations to the shape abstraction
             for (shape_idx, configs) in new_configs {
-                self.extend_shape(shape_idx, configs)?;
+                self.extend_shape(solver, shape_idx, configs)?;
             }
         }
 
         Ok(())
+    }
+}
+
+impl fmt::Display for Shape {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Shape([{}], [{}])",
+            self.chans.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+            self.procs.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+        )
+    }
+}
+
+impl fmt::Display for ShapeAbstraction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ShapeAbstraction({})", self.shape)
     }
 }

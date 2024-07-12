@@ -22,6 +22,7 @@ use crate::execution::Configuration;
 use clap::{command, Parser};
 use error::SpannedError;
 use lalrpop_util::lalrpop_mod;
+use mc::ModelChecker;
 use riptide::TranslationOptions;
 use smt::{EncodingCtx, SolverOptions};
 use span::{FilePath, Source};
@@ -117,11 +118,24 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         _ => Err(format!("unknown extension {}", path))?,
     };
 
-    // TODO: test code for symbolic execution
-    let mut smt_ctx = EncodingCtx::new("exec");
-    let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
-    println!("init config: {}", config);
-    dfs(&config);
+    {
+        // TODO: test code for symbolic execution
+        // let mut smt_ctx = EncodingCtx::new("exec");
+        // let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
+        // println!("init config: {}", config);
+        // dfs(&config);
+        let solver_options = SolverOptions {
+            log: match &args.log_smt {
+                Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
+                None => None,
+            },
+        };
+        let mut mc = ModelChecker::new(&ctx);
+        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
+        mc.abstract_shape(&mut solver, "Program", 1)?;
+
+        return Ok(())
+    }
 
     if args.check_perm && args.infer_perm {
         Err("cannot set both --check-perm and --infer-perm".to_string())?;
