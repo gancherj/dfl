@@ -23,9 +23,9 @@ pub struct ChanState {
  * "context-switching" can happen, one can split
  * statements into multiple process definitions.
  */
-pub struct ProcState {
-    pub name: ProcName,
-    pub args: Vector<smt::Term>,
+pub enum ProcState {
+    Call(ProcName, Vector<smt::Term>),
+    End,
 }
 
 #[derive(Debug, Clone)]
@@ -39,15 +39,12 @@ pub struct Configuration {
 }
 
 #[derive(Debug, Clone)]
-enum ProcEvalResult {
-    // Process is blocked, and the remaining process term is returned
-    Partial(Proc, Configuration),
+pub enum ProcEvalResult {
+    // Process is blocked, and the remaining process term, the modified configuration, and the additional path conditions are returned
+    Partial(Proc, Configuration, Vector<smt::Term>),
 
-    // Process hits another process call
+    // Process hits another process call or skip
     Full(ProcState, Configuration),
-
-    // Process hits skip
-    End(Configuration),
 }
 
 #[derive(Debug, Clone)]
@@ -183,11 +180,11 @@ impl Configuration {
         match &proc.x {
             ProcX::Skip => Ok(Vector::new()),
             ProcX::Call(name, args) =>
-                Ok(vector![ProcState {
-                    name: name.clone(),
-                    args: args.iter().map(|arg| self.eval_term(&HashMap::new(), arg))
+                Ok(vector![ProcState::Call(
+                    name.clone(),
+                    args.iter().map(|arg| self.eval_term(&HashMap::new(), arg))
                         .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
-                }]),
+                )]),
             ProcX::Par(left, right) => {
                 let mut left_procs = self.decompose_parallels(left)?;
                 let right_procs = self.decompose_parallels(right)?;
@@ -358,6 +355,10 @@ impl Configuration {
         }
     }
 
+    fn eval_proc(&self, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
+        self.clone().eval_proc_helper(self, local, proc)
+    }
+
     /**
      * Execute a process until
      * - Skip
@@ -365,28 +366,32 @@ impl Configuration {
      * - Blocked recv/send
      * (without checking feasibility of path conditions)
      */
-    fn eval_proc(mut self, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
+    fn eval_proc_helper(mut self, old_config: &Configuration, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
         match &proc.x {
-            ProcX::Skip => Ok(vector![ProcEvalResult::End(self)]),
+            ProcX::Skip => Ok(vector![ProcEvalResult::Full(ProcState::End, self)]),
 
             ProcX::Send(name, term, cont) => {
                 let value = self.eval_term(local, term)?;
                 let chan = self.chans.get_mut(name).ok_or(format!("channel {} not found", name))?;
                 if chan.push(value) {
-                    Ok(self.eval_proc(local, cont)?)
+                    Ok(self.eval_proc_helper(old_config, local, cont)?)
                 } else {
                     // Blocked
-                    Ok(vector![ProcEvalResult::Partial(proc.clone(), self)])
+                    let new_path_conditions = self.path_conditions.split_off(old_config.path_conditions.len());
+                    Ok(vector![ProcEvalResult::Partial(proc.clone(), self, new_path_conditions)])
                 }
             },
 
             ProcX::Recv(name, var, cont) => {
                 let chan = self.chans.get_mut(name).ok_or(format!("channel {} not found", name))?;
                 match chan.pop() {
-                    None => Ok(vector![ProcEvalResult::Partial(proc.clone(), self)]),
+                    None => {
+                        let new_path_conditions = self.path_conditions.split_off(old_config.path_conditions.len());
+                        Ok(vector![ProcEvalResult::Partial(proc.clone(), self, new_path_conditions)])
+                    },
                     Some(value) => {
                         local.insert(var.clone(), value);
-                        Ok(self.eval_proc(local, cont)?)
+                        Ok(self.eval_proc_helper(old_config, local, cont)?)
                     }
                 }
             },
@@ -394,29 +399,50 @@ impl Configuration {
             ProcX::Write(mut_ref, term, cont) => {
                 let (name, updated) = self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
                 self.muts.insert(name, updated);
-                Ok(self.eval_proc(local, cont)?)
+                Ok(self.eval_proc_helper(old_config, local, cont)?)
             },
 
             ProcX::Read(mut_ref, var, cont) => {
                 let value = self.eval_mut_ref_read(local, mut_ref)?;
                 local.insert(var.clone(), value);
-                Ok(self.eval_proc(local, cont)?)
+                Ok(self.eval_proc_helper(old_config, local, cont)?)
             },
 
             ProcX::Ite(t, p1, p2) => {
                 let mut copy = self.clone();
+                let mut local_copy = local.clone();
                 self.path_conditions.push_back(self.eval_term(local, t)?);
                 copy.path_conditions.push_back(smt::TermX::not(self.eval_term(local, t)?));
-                Ok(self.eval_proc(local, p1)? + copy.eval_proc(local, p2)?)
+                Ok(self.eval_proc_helper(old_config, local, p1)? + copy.eval_proc_helper(old_config, &mut local_copy, p2)?)
             },
 
             ProcX::Call(name, args) =>
-                Ok(vector![ProcEvalResult::Full(ProcState {
-                    name: name.clone(),
-                    args: args.iter().map(|arg| self.eval_term(local, arg))
+                Ok(vector![ProcEvalResult::Full(ProcState::Call(
+                    name.clone(),
+                    args.iter().map(|arg| self.eval_term(local, arg))
                         .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
-                }, self)]),
+                ), self)]),
             ProcX::Par(..) => Err(format!("parallel composition only allowed at the top level"))?,
+        }
+    }
+
+    pub fn eval_proc_state(&self, proc_state: &ProcState) -> Result<Vector<ProcEvalResult>, Error> {
+        match proc_state {
+            ProcState::End => Ok(vector![]),
+            ProcState::Call(proc_name, proc_args) => {
+                let mut local = HashMap::new();
+
+                let proc_decl = self.ctx.procs.get(proc_name)
+                    .ok_or(format!("process {} not found", proc_name))?;
+
+                assert!(proc_decl.params.len() == proc_args.len());
+
+                for (param, arg) in proc_decl.params.iter().zip(proc_args.iter()) {
+                    local.insert(param.name.clone(), arg.clone());
+                }
+
+                self.eval_proc(&mut local, &proc_decl.body)
+            }
         }
     }
 
@@ -446,70 +472,56 @@ impl Configuration {
         let mut stepped_branches = Vector::new();
 
         for (i, proc_state) in self.procs.iter().enumerate() {
-            let mut local = HashMap::new();
+            if let ProcState::Call(proc_name, ..) = proc_state {
+                let results = config.eval_proc_state(proc_state)?;
+                assert!(results.len() > 0);
 
-            let proc_decl = self.ctx.procs.get(&proc_state.name)
-                .ok_or(format!("process {} not found", proc_state.name))?;
+                // If the results are all partial, then none of the branches can make progress until a call
+                // so we just move on to the next process while restoring the path conditions
+                if results.iter().all(|r| match r { ProcEvalResult::Partial(..) => true, _ => false, }) {
+                    continue;
+                }
 
-            assert!(proc_decl.params.len() == proc_state.args.len());
+                // All partial branches can be merged together, with the new path condition being the disjunction
+                // of new path conditions in each partial branch
+                let partial_condition = smt::TermX::or(
+                    results.iter().filter_map(|r| match r {
+                        // Take the conjunction of all new path conditions (compared to config.path_conditions)
+                        ProcEvalResult::Partial(_, _, new_path_conditions) => Some(
+                            smt::TermX::and(new_path_conditions)
+                        ),
+                        _ => None,
+                    })
+                );
 
-            for (param, arg) in proc_decl.params.iter().zip(proc_state.args.iter()) {
-                local.insert(param.name.clone(), arg.clone());
-            }
-
-            let results = config.clone().eval_proc(&mut local, &proc_decl.body)?;
-            assert!(results.len() > 0);
-
-            // If the results are all partial, then none of the branches can make progress until a call
-            // so we just move on to the next process while restoring the path conditions
-            if results.iter().all(|r| match r { ProcEvalResult::Partial(..) => true, _ => false, }) {
-                continue;
-            }
-
-            // All partial branches can be merged together, with the new path condition being the disjunction
-            // of new path conditions in each partial branch
-            let partial_condition = smt::TermX::or(
-                results.iter().filter_map(|r| match r {
-                    // Take the conjunction of all new path conditions (compared to config.path_conditions)
-                    ProcEvalResult::Partial(_, new_config) => Some(
-                        smt::TermX::and(new_config.path_conditions.iter().skip(config.path_conditions.len()))
-                    ),
-                    _ => None,
-                })
-            );
-
-            // Other full/end results can be collected into stepped_branches
-            let mut has_partial = false;
-            for result in results {
-                match result {
-                    ProcEvalResult::Full(new_proc_state, mut new_config) => {
-                        // Update process state
-                        new_config.procs[i] = new_proc_state;
-                        stepped_branches.push_back(StepResult::Step(proc_state.name.clone(), new_config));
-                    },
-                    ProcEvalResult::End(mut new_config) => {
-                        // Remove the process state as it has finished
-                        new_config.procs.remove(i);
-                        stepped_branches.push_back(StepResult::Step(proc_state.name.clone(), new_config));
-                    },
-                    _ => {
-                        has_partial = true;
+                // Other full/end results can be collected into stepped_branches
+                let mut has_partial = false;
+                for result in results {
+                    match result {
+                        ProcEvalResult::Full(new_proc_state, mut new_config) => {
+                            // Update process state
+                            new_config.procs[i] = new_proc_state;
+                            stepped_branches.push_back(StepResult::Step(proc_name.clone(), new_config));
+                        },
+                        _ => {
+                            has_partial = true;
+                        }
                     }
                 }
-            }
 
-            if !has_partial {
-                break;
-            }
+                if !has_partial {
+                    break;
+                }
 
-            if i == self.procs.len() - 1 {
-                // Under partial_condition, the original config (self)
-                // cannot make progress on any process, so we conclude
-                // it is terminal
-                stepped_branches.push_back(StepResult::Terminal(self.clone()));
-            } else {
-                // Continue with the union of all partial branches
-                config.path_conditions.push_back(partial_condition);
+                if i == self.procs.len() - 1 {
+                    // Under partial_condition, the original config (self)
+                    // cannot make progress on any process, so we conclude
+                    // it is terminal
+                    stepped_branches.push_back(StepResult::Terminal(self.clone()));
+                } else {
+                    // Continue with the union of all partial branches
+                    config.path_conditions.push_back(partial_condition);
+                }
             }
         }
 
@@ -531,21 +543,35 @@ impl fmt::Display for ChanState {
     }
 }
 
+impl fmt::Display for ProcState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProcState::Call(name, args) => write!(f, "{}({})",
+                name,
+                args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")
+            ),
+            ProcState::End => write!(f, "skip")
+        }
+    }
+}
+
 impl fmt::Display for Configuration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Configuration {{")?;
 
-        for (name, term) in self.consts.iter() {
-            writeln!(f, "  const {} => {},", name, term)?;
+        for name in self.ctx.consts.keys() {
+            writeln!(f, "  const {} => {}", name, self.consts[name])?;
         }
 
-        for (name, term) in self.muts.iter() {
-            writeln!(f, "  mut {} => {},", name, term)?;
+        for name in self.ctx.muts.keys() {
+            writeln!(f, "  mut {} => {}", name, self.muts[name])?;
         }
 
-        for (name, state) in self.chans.iter() {
-            writeln!(f, "  chan {} => {},", name, state)?;
+        for name in self.ctx.chans.keys() {
+            writeln!(f, "  chan {} => {}", name, self.chans[name])?;
         }
+
+        writeln!(f, "  proc {}", self.procs.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" || "))?;
 
         for condition in self.path_conditions.iter() {
             writeln!(f, "  constraint {}", condition)?;

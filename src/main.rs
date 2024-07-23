@@ -132,7 +132,10 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         };
         let mut mc = ModelChecker::new(&ctx);
         let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
-        mc.abstract_shape(&mut solver, "Program", 1)?;
+        solver.set_logic("ALL")?;
+
+        mc.compute_reachable_shapes(&mut solver, "Program", 1)?;
+        println!("has wait cycle: {}", mc.check_wait_cycle(&mut solver)?);
 
         return Ok(())
     }

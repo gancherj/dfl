@@ -149,6 +149,7 @@ pub struct EncodingCtx {
     prefix: String,
     fresh_var_count: u64,
     decls: IndexMap<Ident, Command>,
+    flushed_decls: usize,
     used_names: HashSet<Ident>,
 }
 
@@ -158,6 +159,7 @@ impl EncodingCtx {
             prefix: prefix.into(),
             fresh_var_count: 0,
             decls: IndexMap::new(),
+            flushed_decls: 0,
             used_names: HashSet::new(),
         }
     }
@@ -233,8 +235,18 @@ impl EncodingCtx {
     pub fn to_commands(&self) -> impl Iterator<Item=&Command> {
         self.decls.values()
     }
+
+    /// Flush all new declļarations to the solver
+    pub fn flush(&mut self, solver: &mut Solver) -> SolverResult<()> {
+        for decl in self.decls.values().skip(self.flushed_decls) {
+            solver.send_command(decl)?;
+        }
+        self.flushed_decls = self.decls.len();
+        Ok(())
+    }
 }
 
+#[derive(Eq, PartialEq)]
 pub enum CheckSatResult {
     Sat,
     Unsat,

@@ -1,5 +1,6 @@
 use core::fmt;
 use std::borrow::Borrow;
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -19,7 +20,7 @@ use crate::error::Error;
  */
 struct Shape {
     chans: Vec<usize>,
-    procs: Vec<ProcName>,
+    procs: Vec<Option<ProcName>>, // Some if the process is alive, otherwise None
 }
 
 type ShapeIndex = usize;
@@ -46,15 +47,194 @@ pub struct Subsumption {
     pub condition: Vec<smt::Term>,
 }
 
+/**
+ * In a configuration, a process P has a wait dependency on Q if
+ * In the current config, P blocks on recv (send) a channel C,
+ * and the send (recv) ownership of C is held by Q
+ *
+ * Since P may branch, the each wait dependency edge is
+ * conditioned by a path condition wrt variables in the config.
+ */
+pub struct WaitDependencyGraph {
+    // [ src -> [ dest -> condition1 \/ condition2 ] ]
+    // NOTE: the conditions are disjunctive
+    edges: IndexMap<ProcName, IndexMap<ProcName, Vec<smt::Term>>>,
+}
+
 impl Configuration {
     fn get_shape(&self) -> Result<Shape, String> {
         let chans = self.ctx.chans.values()
             .map(|decl| self.chans.get(&decl.name).map(|s| s.len()))
             .collect::<Option<_>>()
             .ok_or(format!("channel not found"))?;
-        let procs = self.procs.iter().map(|s| s.name.clone()).collect();
+        let procs = self.procs.iter().map(|s| match s {
+            ProcState::Call(name, _) => Some(name.clone()),
+            ProcState::End => None,
+        }).collect();
 
         Ok(Shape { chans, procs })
+    }
+
+    /// Build a wait dependency graph from the configuration
+    fn build_wait_dep_graph(&self) -> Result<WaitDependencyGraph, Error> {
+        let mut edges = IndexMap::new();
+
+        // c -> owner of `input c`
+        let mut in_chan_owners = IndexMap::new();
+
+        // c -> owner of `output c`
+        let mut out_chan_owners = IndexMap::new();
+
+        // Map channels to their owners
+        for proc_state in &self.procs {
+            match proc_state {
+                ProcState::End => {}
+                ProcState::Call(proc_name, ..) => {
+                    let decl = self.ctx.procs.get(proc_name).ok_or(format!("undefined process"))?;
+                    for res in &decl.res {
+                        match &res.x {
+                            ProcResourceX::Perm(..) => {}
+                            ProcResourceX::Input(name) => { in_chan_owners.insert(name.clone(), proc_name.clone()); }
+                            ProcResourceX::Output(name) => { out_chan_owners.insert(name.clone(), proc_name.clone()); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Iterate through each process state and gather their dependencies
+        for proc_state in &self.procs {
+            let mut out_edges: IndexMap<_, Vec<smt::Term>> = IndexMap::new();
+
+            if let ProcState::Call(proc_name, ..) = proc_state {
+                let results = self.eval_proc_state(proc_state)?;
+                assert!(results.len() > 0);
+
+                for result in results {
+                    match result {
+                        ProcEvalResult::Full(..) => {}, // not stuck, no dependency
+                        ProcEvalResult::Partial(rem, _, path_conditions) => {
+                            let owner = match &rem.x {
+                                // Blocked on send, want to find the owner of input of the channel
+                                ProcX::Send(chan, ..) => in_chan_owners.get(chan),
+                                ProcX::Recv(chan, ..) => out_chan_owners.get(chan),
+                                _ => unreachable!("blocked at non-blockable process"),
+                            };
+
+                            // If the owner is live, add the dependency (extend the path conditions if the dependency exists)
+                            if let Some(owner) = owner {
+                                if out_edges.contains_key(owner) {
+                                    out_edges.get_mut(owner).unwrap().push(smt::TermX::and(path_conditions));
+                                } else {
+                                    out_edges.insert(owner.clone(), vec![smt::TermX::and(path_conditions)]);
+                                }
+                            }
+                        },
+                    }
+                }
+
+                // Add out edges for proc_name
+                edges.insert(proc_name.clone(), out_edges);
+            }
+        }
+
+        Ok(WaitDependencyGraph { edges })
+    }
+
+    // Get the first non-skip process state
+    fn get_first_live_process(&self) -> Option<&ProcName> {
+        for proc_state in &self.procs {
+            if let ProcState::Call(proc_name, ..) = proc_state {
+                return Some(proc_name)
+            }
+        }
+        None
+    }
+
+    // fn check_wait_cycle_helper(
+    //     &self,
+    //     solver: &mut smt::Solver,
+    //     ancestors: &mut IndexSet<ProcName>,
+    //     visited: &mut IndexSet<ProcName>,
+    // ) ->  {
+
+    // }
+
+    /**
+     * Given a (symbolic) configuration, check if there
+     * is a wait cycle between processes
+     */
+    fn check_wait_cycle(&self, solver: &mut smt::Solver) -> Result<bool, Error> {
+        let wait_dep = self.build_wait_dep_graph()?;
+
+        // Find a cycle (with satisfiable path conditions) using dfs
+        let mut stack = Vector::new();
+
+        let mut visited = HashSet::new(); // visited nodes with no cycles
+        let mut ancestor = IndexSet::new(); // ancestors for the current node
+
+        // Get the first non-skip process state
+        if let Some(name) = self.get_first_live_process() {
+            stack.push_back(name);
+        } else {
+            // No live processes, so no possible cycles
+            return Ok(false);
+        }
+
+        loop {
+            if let Some(proc_name) = stack.pop_back() {
+                if ancestor.contains(proc_name) {
+                    assert!(ancestor.last() == Some(&proc_name));
+                    ancestor.shift_remove(proc_name);
+                    visited.insert(proc_name);
+                    continue;
+                } else {
+                    ancestor.insert(proc_name);
+                    // visit the node again to remove ancestor tag
+                    // once all children are visited
+                    stack.push_back(proc_name);
+                }
+
+                // If any children points to an ancestor node, we found a cycle
+                if let Some(out_edges) = wait_dep.edges.get(proc_name) {
+                    for (child, conditions) in out_edges.iter() {
+                        if let Some(ancestor_idx) = ancestor.get_index_of(child) {
+                            // Found a cycle
+                            // Check if the path condition from the ancestor all the way down is satisfiable
+                            let mut path_conditions = vec![smt::TermX::or(conditions)];
+
+                            // For each two adjacent ancestor from ancestor idx
+                            // Collect the path condition between them
+                            for (ancestor1, ancestor2) in ancestor.iter().skip(ancestor_idx).zip(ancestor.iter().skip(ancestor_idx + 1)) {
+                                let conditions = wait_dep.edges.get(*ancestor1).unwrap().get(*ancestor2).unwrap();
+                                path_conditions.push(smt::TermX::or(conditions));
+                            }
+
+                            // Solve the path conditions for satisfiability
+                            solver.push()?;
+                            for condition in self.path_conditions.iter() {
+                                solver.assert(condition)?;
+                            }
+                            let result = solver.check_sat()?;
+                            solver.pop()?;
+
+                            if result == smt::CheckSatResult::Sat {
+                                // Found a feasible cycle
+                                return Ok(true);
+                            }
+                            // Otherwise, we found a infeasible cycle
+                            println!("infeasible cycle")
+                        } else {
+                            stack.push_back(child);
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(false)
     }
 
     /**
@@ -101,12 +281,13 @@ impl Configuration {
         }
 
         for (self_proc, other_proc) in self.procs.iter().zip(config.procs.iter()) {
-            if self_proc.name != other_proc.name {
-                return Ok(None);
-            }
-
-            for (self_term, other_term) in self_proc.args.iter().zip(other_proc.args.iter()) {
-                match_terms(self_term, other_term)?;
+            match (self_proc, other_proc) {
+                (ProcState::Call(self_name, self_args), ProcState::Call(other_name, other_args)) if self_name == other_name =>
+                    for (self_term, other_term) in self_args.iter().zip(other_args.iter()) {
+                        match_terms(self_term, other_term)?;
+                    }
+                (ProcState::End, ProcState::End) => {}
+                _ => return Ok(None)
             }
         }
 
@@ -136,7 +317,7 @@ impl ShapeAbstraction {
         // 3. Syntactically learn equalities between variables (0 queries)
         //    (incomplete, but still monotone)
 
-        // Naive version
+        // Naive version: do not learn constraints on the variables
         if self.pattern.is_none() {
             let ctx = new_configs[0].ctx.clone();
             let mut muts = im::HashMap::new();
@@ -162,15 +343,20 @@ impl ShapeAbstraction {
             }
 
             for proc in &new_configs[0].procs {
-                let decl = ctx.procs.get(&proc.name).ok_or(format!("undefined process"))?;
-                // Generate fresh variables for each process parameter
-                let args = decl.params.iter()
-                    .map(|param| {
-                        let ident = smt_ctx.fresh_const(format!("shape_proc_param_{}", param.name), param.typ.as_smt_sort());
-                        smt::TermX::var(ident)
-                    })
-                    .collect();
-                procs.push_back(ProcState { name: proc.name.clone(), args });
+                match proc {
+                    ProcState::Call(name, _) => {
+                        let decl = ctx.procs.get(name).ok_or(format!("undefined process"))?;
+                        // Generate fresh variables for each process parameter
+                        let args = decl.params.iter()
+                            .map(|param| {
+                                let ident = smt_ctx.fresh_const(format!("shape_proc_param_{}", param.name), param.typ.as_smt_sort());
+                                smt::TermX::var(ident)
+                            })
+                            .collect();
+                        procs.push_back(ProcState::Call(name.clone(), args));
+                    }
+                    ProcState::End => procs.push_back(ProcState::End),
+                }
             }
 
             self.pattern = Some(Configuration {
@@ -180,6 +366,8 @@ impl ShapeAbstraction {
                 path_conditions: Vector::new(),
                 ..new_configs.remove(0)
             });
+
+            smt_ctx.flush(solver)?;
 
             Ok(true)
         } else {
@@ -254,7 +442,7 @@ impl ModelChecker {
     /**
      * Initialize the shape abstraction based on the context
      */
-    pub fn abstract_shape(&mut self, solver: &mut smt::Solver, entry: impl Into<ProcName>, chan_bound: usize) -> Result<(), Error> {
+    pub fn compute_reachable_shapes(&mut self, solver: &mut smt::Solver, entry: impl Into<ProcName>, chan_bound: usize) -> Result<(), Error> {
         // Add the initial configuration
         let init_config = Configuration::new(&mut self.smt_ctx, &self.ctx, entry, chan_bound)?;
         let init_shape_idx = self.get_shape_index(&init_config)?;
@@ -299,19 +487,37 @@ impl ModelChecker {
 
         Ok(())
     }
+
+    /// Check if any shape abstraction has a wait cycle
+    pub fn check_wait_cycle(&mut self, solver: &mut smt::Solver) -> Result<bool, Error> {
+        for shape_abs in self.abs.values() {
+            if let Some(pattern) = &shape_abs.pattern {
+                if pattern.check_wait_cycle(solver)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl fmt::Display for Shape {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Shape([{}], [{}])",
             self.chans.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
-            self.procs.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+            self.procs.iter().map(|i| match i {
+                Some(name) => format!("{}(..)", name),
+                None => "skip".to_string(),
+            }).collect::<Vec<_>>().join(", "),
         )
     }
 }
 
 impl fmt::Display for ShapeAbstraction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ShapeAbstraction({})", self.shape)
+        match &self.pattern {
+            Some(pattern) => write!(f, "ShapeAbstraction({}, {})", self.shape, pattern),
+            None => write!(f, "ShapeAbstraction({}, empty)", self.shape),
+        }
     }
 }
