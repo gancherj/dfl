@@ -2,29 +2,28 @@ use std::io::BufWriter;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::ExitCode;
-use std::{fs, io::BufReader};
 use std::rc::Rc;
+use std::{fs, io::BufReader};
 
 pub mod ast;
 pub mod check;
 pub mod error;
+pub mod execution;
+pub mod mc;
 pub mod permission;
 pub mod riptide;
 pub mod smt;
 pub mod span;
-pub mod execution;
-pub mod mc;
 
 use crate::error::Error;
 use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
-use crate::execution::Configuration;
 
 use clap::{command, Parser};
 use error::SpannedError;
 use lalrpop_util::lalrpop_mod;
 use mc::ModelChecker;
 use riptide::TranslationOptions;
-use smt::{EncodingCtx, SolverOptions};
+use smt::SolverOptions;
 use span::{FilePath, Source};
 
 lalrpop_mod!(pub syntax);
@@ -77,18 +76,18 @@ struct Args {
     log_smt: Option<String>,
 }
 
-fn dfs(config: &Configuration) -> Result<(), Error> {
-    for branch in config.step_one_proc()? {
-        println!("stepped: {}", branch);
-        match branch {
-            execution::StepResult::Step(_, config) => dfs(&config)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
+// fn dfs(config: &Configuration) -> Result<(), Error> {
+//     for branch in config.step_one_proc()? {
+//         println!("stepped: {}", branch);
+//         match branch {
+//             execution::StepResult::Step(_, config) => dfs(&config)?,
+//             _ => {}
+//         }
+//     }
+//     Ok(())
+// }
 
-fn type_check(mut args: Args) -> Result<(), Error> {
+fn type_check(args: Args) -> Result<(), Error> {
     let path: FilePath = args.source.into();
 
     let ctx = match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
@@ -135,9 +134,23 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         solver.set_logic("ALL")?;
 
         mc.compute_reachable_shapes(&mut solver, "Program", 1)?;
-        println!("has wait cycle: {}", mc.check_wait_cycle(&mut solver)?);
 
-        return Ok(())
+        println!("==============================");
+        let cycle = mc.find_wait_cycle(&mut solver)?;
+        if let Some(cycle) = cycle {
+            println!(
+                "has wait cycle: {}",
+                cycle
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            );
+        } else {
+            println!("no cycles found");
+        }
+
+        return Ok(());
     }
 
     if args.check_perm && args.infer_perm {

@@ -2,7 +2,6 @@ use lalrpop_util::ParseError;
 use std::fmt;
 use std::io;
 
-use crate::smt::Solver;
 use crate::span::FilePath;
 use crate::span::Source;
 use crate::span::Span;

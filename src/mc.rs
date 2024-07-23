@@ -1,17 +1,16 @@
 use core::fmt;
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::rc::Rc;
 
-use std::collections::HashMap;
-use im::{Vector, vector};
+use im::Vector;
 use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::error::Error;
 use crate::execution::*;
 use crate::smt;
-use crate::error::Error;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 /**
@@ -35,11 +34,12 @@ pub struct ModelChecker {
     ctx: Rc<Ctx>,
     smt_ctx: smt::EncodingCtx,
 
-    shapes: HashMap<Rc<Shape>, ShapeIndex>,
+    shape_indices: HashMap<Rc<Shape>, ShapeIndex>,
     index_to_shape: Vec<Rc<Shape>>,
     changed_shapes: IndexSet<ShapeIndex>,
 
-    abs: HashMap<ShapeIndex, ShapeAbstraction>,
+    // All reachable shapes
+    shapes: HashMap<ShapeIndex, ShapeAbstraction>,
 }
 
 pub struct Subsumption {
@@ -63,14 +63,21 @@ pub struct WaitDependencyGraph {
 
 impl Configuration {
     fn get_shape(&self) -> Result<Shape, String> {
-        let chans = self.ctx.chans.values()
+        let chans = self
+            .ctx
+            .chans
+            .values()
             .map(|decl| self.chans.get(&decl.name).map(|s| s.len()))
             .collect::<Option<_>>()
             .ok_or(format!("channel not found"))?;
-        let procs = self.procs.iter().map(|s| match s {
-            ProcState::Call(name, _) => Some(name.clone()),
-            ProcState::End => None,
-        }).collect();
+        let procs = self
+            .procs
+            .iter()
+            .map(|s| match s {
+                ProcState::Call(name, _) => Some(name.clone()),
+                ProcState::End => None,
+            })
+            .collect();
 
         Ok(Shape { chans, procs })
     }
@@ -90,12 +97,20 @@ impl Configuration {
             match proc_state {
                 ProcState::End => {}
                 ProcState::Call(proc_name, ..) => {
-                    let decl = self.ctx.procs.get(proc_name).ok_or(format!("undefined process"))?;
+                    let decl = self
+                        .ctx
+                        .procs
+                        .get(proc_name)
+                        .ok_or(format!("undefined process"))?;
                     for res in &decl.res {
                         match &res.x {
                             ProcResourceX::Perm(..) => {}
-                            ProcResourceX::Input(name) => { in_chan_owners.insert(name.clone(), proc_name.clone()); }
-                            ProcResourceX::Output(name) => { out_chan_owners.insert(name.clone(), proc_name.clone()); }
+                            ProcResourceX::Input(name) => {
+                                in_chan_owners.insert(name.clone(), proc_name.clone());
+                            }
+                            ProcResourceX::Output(name) => {
+                                out_chan_owners.insert(name.clone(), proc_name.clone());
+                            }
                         }
                     }
                 }
@@ -112,7 +127,7 @@ impl Configuration {
 
                 for result in results {
                     match result {
-                        ProcEvalResult::Full(..) => {}, // not stuck, no dependency
+                        ProcEvalResult::Full(..) => {} // not stuck, no dependency
                         ProcEvalResult::Partial(rem, _, path_conditions) => {
                             let owner = match &rem.x {
                                 // Blocked on send, want to find the owner of input of the channel
@@ -124,12 +139,18 @@ impl Configuration {
                             // If the owner is live, add the dependency (extend the path conditions if the dependency exists)
                             if let Some(owner) = owner {
                                 if out_edges.contains_key(owner) {
-                                    out_edges.get_mut(owner).unwrap().push(smt::TermX::and(path_conditions));
+                                    out_edges
+                                        .get_mut(owner)
+                                        .unwrap()
+                                        .push(smt::TermX::and(path_conditions));
                                 } else {
-                                    out_edges.insert(owner.clone(), vec![smt::TermX::and(path_conditions)]);
+                                    out_edges.insert(
+                                        owner.clone(),
+                                        vec![smt::TermX::and(path_conditions)],
+                                    );
                                 }
                             }
-                        },
+                        }
                     }
                 }
 
@@ -141,30 +162,24 @@ impl Configuration {
         Ok(WaitDependencyGraph { edges })
     }
 
-    // Get the first non-skip process state
+    /// Get the first non-skip process state
     fn get_first_live_process(&self) -> Option<&ProcName> {
         for proc_state in &self.procs {
             if let ProcState::Call(proc_name, ..) = proc_state {
-                return Some(proc_name)
+                return Some(proc_name);
             }
         }
         None
     }
 
-    // fn check_wait_cycle_helper(
-    //     &self,
-    //     solver: &mut smt::Solver,
-    //     ancestors: &mut IndexSet<ProcName>,
-    //     visited: &mut IndexSet<ProcName>,
-    // ) ->  {
-
-    // }
-
     /**
      * Given a (symbolic) configuration, check if there
      * is a wait cycle between processes
+     *
+     * If so, return the processes involved in the cycle.
+     * Otherwise return empty vector
      */
-    fn check_wait_cycle(&self, solver: &mut smt::Solver) -> Result<bool, Error> {
+    fn find_wait_cycle(&self, solver: &mut smt::Solver) -> Result<Option<Vec<ProcName>>, Error> {
         let wait_dep = self.build_wait_dep_graph()?;
 
         // Find a cycle (with satisfiable path conditions) using dfs
@@ -178,7 +193,7 @@ impl Configuration {
             stack.push_back(name);
         } else {
             // No live processes, so no possible cycles
-            return Ok(false);
+            return Ok(None);
         }
 
         loop {
@@ -205,8 +220,17 @@ impl Configuration {
 
                             // For each two adjacent ancestor from ancestor idx
                             // Collect the path condition between them
-                            for (ancestor1, ancestor2) in ancestor.iter().skip(ancestor_idx).zip(ancestor.iter().skip(ancestor_idx + 1)) {
-                                let conditions = wait_dep.edges.get(*ancestor1).unwrap().get(*ancestor2).unwrap();
+                            for (ancestor1, ancestor2) in ancestor
+                                .iter()
+                                .skip(ancestor_idx)
+                                .zip(ancestor.iter().skip(ancestor_idx + 1))
+                            {
+                                let conditions = wait_dep
+                                    .edges
+                                    .get(*ancestor1)
+                                    .unwrap()
+                                    .get(*ancestor2)
+                                    .unwrap();
                                 path_conditions.push(smt::TermX::or(conditions));
                             }
 
@@ -220,7 +244,13 @@ impl Configuration {
 
                             if result == smt::CheckSatResult::Sat {
                                 // Found a feasible cycle
-                                return Ok(true);
+                                return Ok(Some(
+                                    ancestor
+                                        .iter()
+                                        .skip(ancestor_idx)
+                                        .map(|p| (*p).clone())
+                                        .collect(),
+                                ));
                             }
                             // Otherwise, we found a infeasible cycle
                             println!("infeasible cycle")
@@ -234,7 +264,7 @@ impl Configuration {
             }
         }
 
-        Ok(false)
+        Ok(None)
     }
 
     /**
@@ -247,12 +277,19 @@ impl Configuration {
 
         // A helper function to match up a variable in the pattern with the other term
         // and collect the mapping to the substitution
-        let mut match_terms = |self_term: &smt::Term, other_term: &smt::Term| -> Result<(), Error> {
-            let var = self_term.as_var().ok_or(format!("expecting variable on the pattern side"))?;
-            assert!(!subst.contains_key(&var), "duplicate variable {} in the pattern", &var);
-            subst.insert(var, other_term.clone());
-            Ok(())
-        };
+        let mut match_terms =
+            |self_term: &smt::Term, other_term: &smt::Term| -> Result<(), Error> {
+                let var = self_term
+                    .as_var()
+                    .ok_or(format!("expecting variable on the pattern side"))?;
+                assert!(
+                    !subst.contains_key(&var),
+                    "duplicate variable {} in the pattern",
+                    &var
+                );
+                subst.insert(var, other_term.clone());
+                Ok(())
+            };
 
         // Match mutable states
         for name in self.ctx.muts.keys() {
@@ -282,17 +319,25 @@ impl Configuration {
 
         for (self_proc, other_proc) in self.procs.iter().zip(config.procs.iter()) {
             match (self_proc, other_proc) {
-                (ProcState::Call(self_name, self_args), ProcState::Call(other_name, other_args)) if self_name == other_name =>
+                (
+                    ProcState::Call(self_name, self_args),
+                    ProcState::Call(other_name, other_args),
+                ) if self_name == other_name => {
                     for (self_term, other_term) in self_args.iter().zip(other_args.iter()) {
                         match_terms(self_term, other_term)?;
                     }
+                }
                 (ProcState::End, ProcState::End) => {}
-                _ => return Ok(None)
+                _ => return Ok(None),
             }
         }
 
         // Substitute the path condition
-        let condition = self.path_conditions.iter().map(|term| smt::TermX::substitute(term, &subst)).collect();
+        let condition = self
+            .path_conditions
+            .iter()
+            .map(|term| smt::TermX::substitute(term, &subst))
+            .collect();
 
         Ok(Some(Subsumption { subst, condition }))
     }
@@ -310,69 +355,89 @@ impl ShapeAbstraction {
     /**
      * Extend an abstraction with more examples
      * Return true iff the abstraction needs to be weakened
+     *
+     * Assume all new_configs are feasible configurations
      */
-    fn extend(&mut self, smt_ctx: &mut smt::EncodingCtx, solver: &mut smt::Solver, mut new_configs: Vec<Configuration>) -> Result<bool, Error> {
+    fn extend(
+        &mut self,
+        smt_ctx: &mut smt::EncodingCtx,
+        solver: &mut smt::Solver,
+        mut new_configs: Vec<Configuration>,
+    ) -> Result<bool, Error> {
         // 1. Filter out infeasible new configs (|new_configs| queries)
         // 2. Learn (x == c) predicates at each variable (|size of shape| queries)
         // 3. Syntactically learn equalities between variables (0 queries)
         //    (incomplete, but still monotone)
 
-        // Naive version: do not learn constraints on the variables
-        if self.pattern.is_none() {
-            let ctx = new_configs[0].ctx.clone();
-            let mut muts = im::HashMap::new();
-            let mut chans = im::HashMap::new();
-            let mut procs = Vector::new();
+        if let Some(first_config) = new_configs.first() {
+            // If there are any feasible configurations, continue
 
-            for decl in ctx.muts.values() {
-                let ident = smt_ctx.fresh_const(format!("shape_mut_{}", decl.name), decl.typ.as_smt_sort());
-                muts.insert(decl.name.clone(), smt::TermX::var(ident));
-            }
+            // Naive version: do not learn constraints on the variables
+            if self.pattern.is_none() {
+                let ctx = first_config.ctx.clone();
+                let mut muts = im::HashMap::new();
+                let mut chans = im::HashMap::new();
+                let mut procs = Vector::new();
 
-            for (i, decl) in ctx.chans.values().enumerate() {
-                let bound = new_configs[0].chans[&decl.name].bound;
-                let mut state = ChanState::new(bound);
-
-                // Generate placeholders for each channel value
-                for j in 0..self.shape.chans[i] {
-                    let ident = smt_ctx.fresh_const(format!("shape_chan_{}_{}", decl.name, j), decl.typ.as_smt_sort());
-                    state.push(smt::TermX::var(ident));
+                for decl in ctx.muts.values() {
+                    let ident = smt_ctx
+                        .fresh_const(format!("shape_mut_{}", decl.name), decl.typ.as_smt_sort());
+                    muts.insert(decl.name.clone(), smt::TermX::var(ident));
                 }
 
-                chans.insert(decl.name.clone(), state);
-            }
+                for (i, decl) in ctx.chans.values().enumerate() {
+                    let bound = first_config.chans[&decl.name].bound;
+                    let mut state = ChanState::new(bound);
 
-            for proc in &new_configs[0].procs {
-                match proc {
-                    ProcState::Call(name, _) => {
-                        let decl = ctx.procs.get(name).ok_or(format!("undefined process"))?;
-                        // Generate fresh variables for each process parameter
-                        let args = decl.params.iter()
-                            .map(|param| {
-                                let ident = smt_ctx.fresh_const(format!("shape_proc_param_{}", param.name), param.typ.as_smt_sort());
-                                smt::TermX::var(ident)
-                            })
-                            .collect();
-                        procs.push_back(ProcState::Call(name.clone(), args));
+                    // Generate placeholders for each channel value
+                    for j in 0..self.shape.chans[i] {
+                        let ident = smt_ctx.fresh_const(
+                            format!("shape_chan_{}_{}", decl.name, j),
+                            decl.typ.as_smt_sort(),
+                        );
+                        state.push(smt::TermX::var(ident));
                     }
-                    ProcState::End => procs.push_back(ProcState::End),
+
+                    chans.insert(decl.name.clone(), state);
                 }
+
+                for proc in &first_config.procs {
+                    match proc {
+                        ProcState::Call(name, _) => {
+                            let decl = ctx.procs.get(name).ok_or(format!("undefined process"))?;
+                            // Generate fresh variables for each process parameter
+                            let args = decl
+                                .params
+                                .iter()
+                                .map(|param| {
+                                    let ident = smt_ctx.fresh_const(
+                                        format!("shape_proc_param_{}", param.name),
+                                        param.typ.as_smt_sort(),
+                                    );
+                                    smt::TermX::var(ident)
+                                })
+                                .collect();
+                            procs.push_back(ProcState::Call(name.clone(), args));
+                        }
+                        ProcState::End => procs.push_back(ProcState::End),
+                    }
+                }
+
+                self.pattern = Some(Configuration {
+                    muts,
+                    chans,
+                    procs,
+                    path_conditions: Vector::new(),
+                    ..new_configs.remove(0)
+                });
+
+                smt_ctx.flush(solver)?;
+
+                return Ok(true);
             }
-
-            self.pattern = Some(Configuration {
-                muts,
-                chans,
-                procs,
-                path_conditions: Vector::new(),
-                ..new_configs.remove(0)
-            });
-
-            smt_ctx.flush(solver)?;
-
-            Ok(true)
-        } else {
-            Ok(false)
         }
+
+        return Ok(false);
     }
 }
 
@@ -392,10 +457,10 @@ impl ModelChecker {
         ModelChecker {
             ctx: ctx.clone(),
             smt_ctx: smt::EncodingCtx::new("mc"),
-            shapes: HashMap::new(),
+            shape_indices: HashMap::new(),
             index_to_shape: Vec::new(),
             changed_shapes: IndexSet::new(),
-            abs: HashMap::new(),
+            shapes: HashMap::new(),
         }
     }
 
@@ -405,11 +470,11 @@ impl ModelChecker {
      */
     fn get_shape_index(&mut self, config: &Configuration) -> Result<ShapeIndex, Error> {
         let shape = Rc::new(config.get_shape()?);
-        match self.shapes.get(&shape) {
+        match self.shape_indices.get(&shape) {
             Some(idx) => Ok(*idx),
             None => {
-                let idx = self.shapes.len();
-                self.shapes.insert(shape.clone(), idx);
+                let idx = self.shape_indices.len();
+                self.shape_indices.insert(shape.clone(), idx);
                 self.index_to_shape.push(shape);
                 Ok(idx)
             }
@@ -417,18 +482,26 @@ impl ModelChecker {
     }
 
     /**
-     * Assuming all configs have the same shape
+     * Assuming all configs have the same shape and are feasible
      *
      * Add the configurations to their shape abstraction
      * If the abstraction changed due to the new examples
      * update changed_shape
      */
-    fn extend_shape(&mut self, solver: &mut smt::Solver, shape_idx: ShapeIndex, configs: Vec<Configuration>) -> Result<(), Error> {
-        if !self.abs.contains_key(&shape_idx) {
-            self.abs.insert(shape_idx, ShapeAbstraction::new(&self.index_to_shape[shape_idx]));
+    fn extend_shape(
+        &mut self,
+        solver: &mut smt::Solver,
+        shape_idx: ShapeIndex,
+        configs: Vec<Configuration>,
+    ) -> Result<(), Error> {
+        if !self.shapes.contains_key(&shape_idx) {
+            self.shapes.insert(
+                shape_idx,
+                ShapeAbstraction::new(&self.index_to_shape[shape_idx]),
+            );
         }
 
-        let abs = self.abs.get_mut(&shape_idx).unwrap();
+        let abs = self.shapes.get_mut(&shape_idx).unwrap();
         if abs.extend(&mut self.smt_ctx, solver, configs)? {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
@@ -442,7 +515,12 @@ impl ModelChecker {
     /**
      * Initialize the shape abstraction based on the context
      */
-    pub fn compute_reachable_shapes(&mut self, solver: &mut smt::Solver, entry: impl Into<ProcName>, chan_bound: usize) -> Result<(), Error> {
+    pub fn compute_reachable_shapes(
+        &mut self,
+        solver: &mut smt::Solver,
+        entry: impl Into<ProcName>,
+        chan_bound: usize,
+    ) -> Result<(), Error> {
         // Add the initial configuration
         let init_config = Configuration::new(&mut self.smt_ctx, &self.ctx, entry, chan_bound)?;
         let init_shape_idx = self.get_shape_index(&init_config)?;
@@ -450,7 +528,11 @@ impl ModelChecker {
 
         // Iterate until no more changes in the shape abstraction
         while self.changed_shapes.len() > 0 {
-            println!("all shapes: {}, changed shapes: {}", self.abs.len(), self.changed_shapes.len());
+            println!(
+                "all shapes: {}, changed shapes: {}",
+                self.shapes.len(),
+                self.changed_shapes.len()
+            );
 
             // Pop all changed shapes
             let old_changed_shapes = self.changed_shapes.iter().cloned().collect::<Vec<_>>();
@@ -461,19 +543,28 @@ impl ModelChecker {
             // Step all changed shapes to get new configurations
             for shape_idx in old_changed_shapes {
                 // Get the abstraction pattern
-                let abs_pattern = self.abs.get(&shape_idx).unwrap().pattern.as_ref().unwrap();
+                let abs_pattern = self
+                    .shapes
+                    .get(&shape_idx)
+                    .unwrap()
+                    .pattern
+                    .as_ref()
+                    .unwrap();
 
                 // Make one step
                 for result in abs_pattern.step_one_proc()? {
                     match result {
                         StepResult::Step(_, new_config) => {
-                            let shape_idx = self.get_shape_index(&new_config)?;
+                            if new_config.feasible(solver)? == smt::CheckSatResult::Sat {
+                                // Found a feasible step
+                                let shape_idx = self.get_shape_index(&new_config)?;
 
-                            if !new_configs.contains_key(&shape_idx) {
-                                new_configs.insert(shape_idx, Vec::new());
+                                if !new_configs.contains_key(&shape_idx) {
+                                    new_configs.insert(shape_idx, Vec::new());
+                                }
+                                new_configs.get_mut(&shape_idx).unwrap().push(new_config);
                             }
-                            new_configs.get_mut(&shape_idx).unwrap().push(new_config);
-                        },
+                        }
                         StepResult::Terminal(..) => {} // ignore terminal branches
                     }
                 }
@@ -489,26 +580,42 @@ impl ModelChecker {
     }
 
     /// Check if any shape abstraction has a wait cycle
-    pub fn check_wait_cycle(&mut self, solver: &mut smt::Solver) -> Result<bool, Error> {
-        for shape_abs in self.abs.values() {
+    pub fn find_wait_cycle(
+        &mut self,
+        solver: &mut smt::Solver,
+    ) -> Result<Option<Vec<ProcName>>, Error> {
+        for shape_abs in self.shapes.values() {
             if let Some(pattern) = &shape_abs.pattern {
-                if pattern.check_wait_cycle(solver)? {
-                    return Ok(true);
+                let cycle = pattern.find_wait_cycle(solver)?;
+                if cycle.is_some() {
+                    println!("cycle in shape: {}", shape_abs);
+
+                    return Ok(cycle);
                 }
             }
         }
-        Ok(false)
+        Ok(None)
     }
 }
 
 impl fmt::Display for Shape {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Shape([{}], [{}])",
-            self.chans.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
-            self.procs.iter().map(|i| match i {
-                Some(name) => format!("{}(..)", name),
-                None => "skip".to_string(),
-            }).collect::<Vec<_>>().join(", "),
+        write!(
+            f,
+            "Shape([{}], [{}])",
+            self.chans
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.procs
+                .iter()
+                .map(|i| match i {
+                    Some(name) => format!("{}(..)", name),
+                    None => "skip".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         )
     }
 }

@@ -1,6 +1,6 @@
 use im::HashMap;
 use im::HashSet;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use std::borrow::Borrow;
 use std::ffi::OsStr;
 use std::fmt;
@@ -14,8 +14,8 @@ use std::rc::Rc;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
-use crate::BitVecWidth;
 use crate::error::SolverError;
+use crate::BitVecWidth;
 
 pub type Sort = Rc<SortX>;
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -198,13 +198,15 @@ impl EncodingCtx {
 
     pub fn fresh_const(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.decls.insert(name.clone(), CommandX::declare_const(&name, sort));
+        self.decls
+            .insert(name.clone(), CommandX::declare_const(&name, sort));
         name
     }
 
     pub fn fresh_var(&mut self, prefix: impl AsRef<str>, sort: Sort) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.decls.insert(name.clone(), CommandX::declare_var(&name, sort));
+        self.decls
+            .insert(name.clone(), CommandX::declare_var(&name, sort));
         name
     }
 
@@ -215,7 +217,8 @@ impl EncodingCtx {
         sort: Sort,
     ) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.decls.insert(name.clone(), CommandX::declare_fun(&name, inputs, sort));
+        self.decls
+            .insert(name.clone(), CommandX::declare_fun(&name, inputs, sort));
         name
     }
 
@@ -228,11 +231,14 @@ impl EncodingCtx {
         grammar: Option<&SynthFunGrammar>,
     ) -> Ident {
         let name = self.fresh_ident(prefix);
-        self.decls.insert(name.clone(), CommandX::synth_fun(&name, inputs, sort, grammar));
+        self.decls.insert(
+            name.clone(),
+            CommandX::synth_fun(&name, inputs, sort, grammar),
+        );
         name
     }
 
-    pub fn to_commands(&self) -> impl Iterator<Item=&Command> {
+    pub fn to_commands(&self) -> impl Iterator<Item = &Command> {
         self.decls.values()
     }
 
@@ -530,14 +536,15 @@ impl TermX {
                 if subst_f.is_some() || subst_args.iter().any(|arg| arg.is_some()) {
                     Some(TermX::app_term(
                         subst_f.unwrap_or(f.clone()),
-                        subst_args.into_iter()
+                        subst_args
+                            .into_iter()
                             .enumerate()
-                            .map(|(i, arg)| arg.unwrap_or(args[i].clone()))
+                            .map(|(i, arg)| arg.unwrap_or(args[i].clone())),
                     ))
                 } else {
                     None
                 }
-            },
+            }
             TermX::Quant(quant, vars, body) => {
                 let subst_body = TermX::substitute_inplace(body, subst);
                 if subst_body.is_some() {
@@ -549,7 +556,7 @@ impl TermX {
                 } else {
                     None
                 }
-            },
+            }
         }
     }
 
@@ -687,7 +694,11 @@ pub type SolverResult<T> = Result<T, SolverError>;
 impl Solver {
     const WAIT_TIMEOUT: u64 = 5;
 
-    pub fn new<T: AsRef<OsStr>>(cmd: T, args: &[T], options: SolverOptions) -> SolverResult<Solver> {
+    pub fn new<T: AsRef<OsStr>>(
+        cmd: T,
+        args: &[T],
+        options: SolverOptions,
+    ) -> SolverResult<Solver> {
         let mut process = process::Command::new(cmd)
             .args(args)
             .stdin(process::Stdio::piped())

@@ -7,7 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use crate::{
     ast::*,
     check::LocalCtx,
-    error::{SpannedError, Error},
+    error::{Error, SpannedError},
     smt::{self, EncodingCtx, SynthFunGrammar},
     span::Spanned,
 };
@@ -750,8 +750,14 @@ impl Interpretation {
             consts: IndexMap::new(),
             vars: IndexMap::new(),
             perms: IndexMap::new(),
-            mut_idx: smt::TermX::var(fresh_universal_var("mut_idx".to_string(), smt::SortX::int())),
-            frac_idx: smt::TermX::var(fresh_universal_var("frac_idx".to_string(), smt::SortX::int())),
+            mut_idx: smt::TermX::var(fresh_universal_var(
+                "mut_idx".to_string(),
+                smt::SortX::int(),
+            )),
+            frac_idx: smt::TermX::var(fresh_universal_var(
+                "frac_idx".to_string(),
+                smt::SortX::int(),
+            )),
             arr_indices: arr_indices,
 
             constraints: Vec::new(),
@@ -941,7 +947,7 @@ impl PermJudgmentX {
 
         solver.pop()?;
 
-        match solver.check_synth()? {
+        match result {
             smt::CheckSynthResult::Infeasible => Ok(None), // no solution possible
             smt::CheckSynthResult::Fail => Error::other(format!("solver failed to synthesize")),
             smt::CheckSynthResult::Synthesized(model) => Ok(Some(model)),

@@ -6,7 +6,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::*;
-use crate::error::{SpannedError, Error};
+use crate::error::{Error, SpannedError};
 use crate::permission::*;
 use crate::smt;
 use crate::span::Spanned;
@@ -381,10 +381,13 @@ impl TermTypeX {
 impl MutReferenceX {
     /// Type check and then get the mutable type the mutable reference should refer to
     /// e.g. mut A: [[int]] => A[a:b][c].type_check() = [int]
+    /// allow_slice_end is used to indicate whether slices such as A[..x] is allowed
+    /// (allowed in permissions but not as a term)
     pub fn type_check(
         mut_ref: &MutReference,
         ctx: &Ctx,
         local: &LocalCtx,
+        allow_slice_end: bool,
     ) -> Result<MutType, SpannedError> {
         match &mut_ref.x {
             MutReferenceX::Base(n) => Ok(ctx
@@ -404,7 +407,7 @@ impl MutReferenceX {
                 Ok(mut_type)
             }
             MutReferenceX::Index(m, t) => {
-                match MutReferenceX::type_check(m, ctx, local)?.borrow() {
+                match MutReferenceX::type_check(m, ctx, local, allow_slice_end)?.borrow() {
                     MutTypeX::Base(..) => {
                         SpannedError::spanned_err(&mut_ref.span, format!("indexing into base type"))
                     }
@@ -424,7 +427,14 @@ impl MutReferenceX {
                 }
             }
             MutReferenceX::Slice(m, t1, t2) => {
-                let typ = MutReferenceX::type_check(m, ctx, local)?;
+                if !allow_slice_end && t2.is_some() {
+                    return SpannedError::spanned_err(
+                        &mut_ref.span,
+                        "end index not allowed in slices in this context".to_string(),
+                    );
+                }
+
+                let typ = MutReferenceX::type_check(m, ctx, local, allow_slice_end)?;
                 match typ.borrow() {
                     MutTypeX::Base(..) => {
                         SpannedError::spanned_err(&mut_ref.span, format!("slicing into base type"))
@@ -563,7 +573,7 @@ impl TermX {
             TermX::Int(_) => Ok(TermTypeX::int()),
             TermX::BitVec(_, w) => Ok(TermTypeX::bit_vec(*w)),
             TermX::Ref(m) => {
-                MutReferenceX::type_check(m, ctx, local)?;
+                MutReferenceX::type_check(m, ctx, local, false)?;
                 let refs = MutReferenceX::approximate(m, ctx, local)?;
                 Ok(Rc::new(TermTypeX::Ref(refs)))
             }
@@ -671,7 +681,7 @@ impl PermissionX {
             }
             // TODO: should we allow deref in permission?
             PermissionX::Fraction(_, mut_ref) => {
-                MutReferenceX::type_check(mut_ref, ctx, local).map(|_| ())
+                MutReferenceX::type_check(mut_ref, ctx, local, true).map(|_| ())
             }
             PermissionX::Var(v, terms) => {
                 let decl = ctx.perms.get(v).ok_or(SpannedError::spanned(
@@ -794,7 +804,9 @@ impl ProcX {
                 // Check t matches the type of the reference
                 let t_typ = TermX::type_check(t, ctx, local)?;
 
-                if let MutTypeX::Base(base) = MutReferenceX::type_check(m, ctx, local)?.borrow() {
+                if let MutTypeX::Base(base) =
+                    MutReferenceX::type_check(m, ctx, local, false)?.borrow()
+                {
                     if !t_typ.is_subtype(ctx, &TermTypeX::base(base)) {
                         return SpannedError::spanned_err(
                             &proc.span,
@@ -838,7 +850,7 @@ impl ProcX {
             }
             ProcX::Read(m, v, k) => {
                 // Get the return type of the read
-                let mut_typ = MutReferenceX::type_check(m, ctx, local)?;
+                let mut_typ = MutReferenceX::type_check(m, ctx, local, false)?;
 
                 // Check that we have suitable read permission
                 // (for all possibly referenced mutables)

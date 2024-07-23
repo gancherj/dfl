@@ -1,7 +1,7 @@
-use std::rc::Rc;
 use std::fmt;
+use std::rc::Rc;
 
-use im::{Vector, vector, HashMap};
+use im::{vector, HashMap, Vector};
 
 use crate::ast::*;
 use crate::error::{Error, SpannedError};
@@ -57,7 +57,9 @@ impl MutTypeX {
     pub fn as_smt_sort(&self) -> smt::Sort {
         match self {
             MutTypeX::Base(base) => base.as_smt_sort(),
-            MutTypeX::Array(idx, value) => smt::SortX::array(idx.as_smt_sort(), value.as_smt_sort()),
+            MutTypeX::Array(idx, value) => {
+                smt::SortX::array(idx.as_smt_sort(), value.as_smt_sort())
+            }
         }
     }
 }
@@ -96,7 +98,7 @@ impl ChanState {
         }
     }
 
-    pub fn values(&self) -> impl Iterator<Item=&smt::Term> {
+    pub fn values(&self) -> impl Iterator<Item = &smt::Term> {
         self.queue.iter()
     }
 }
@@ -131,7 +133,12 @@ impl Configuration {
     /**
      * Create an initial configuration based on a context and entry process
      */
-    pub fn new(smt_ctx: &mut smt::EncodingCtx, ctx: &Rc<Ctx>, entry: impl Into<ProcName>, chan_bound: usize) -> Result<Configuration, Error> {
+    pub fn new(
+        smt_ctx: &mut smt::EncodingCtx,
+        ctx: &Rc<Ctx>,
+        entry: impl Into<ProcName>,
+        chan_bound: usize,
+    ) -> Result<Configuration, Error> {
         let mut consts = HashMap::new();
         let mut muts = HashMap::new();
         let mut chans = HashMap::new();
@@ -144,7 +151,6 @@ impl Configuration {
         for decl in ctx.muts.values() {
             let ident = smt_ctx.fresh_const(format!("mut_{}", decl.name), decl.typ.as_smt_sort());
             muts.insert(decl.name.clone(), smt::TermX::var(ident));
-
         }
 
         for decl in ctx.chans.values() {
@@ -152,10 +158,16 @@ impl Configuration {
         }
 
         let entry_name: ProcName = entry.into();
-        let entry_proc = ctx.procs.get(&entry_name).ok_or(format!("entry process {} not found", &entry_name))?;
+        let entry_proc = ctx
+            .procs
+            .get(&entry_name)
+            .ok_or(format!("entry process {} not found", &entry_name))?;
 
         if !entry_proc.params.is_empty() {
-            Err(format!("entry process {} should not have parameters", &entry_name))?;
+            Err(format!(
+                "entry process {} should not have parameters",
+                &entry_name
+            ))?;
         }
 
         let mut config = Configuration {
@@ -179,24 +191,31 @@ impl Configuration {
     fn decompose_parallels(&self, proc: &Proc) -> Result<Vector<ProcState>, SpannedError> {
         match &proc.x {
             ProcX::Skip => Ok(Vector::new()),
-            ProcX::Call(name, args) =>
-                Ok(vector![ProcState::Call(
-                    name.clone(),
-                    args.iter().map(|arg| self.eval_term(&HashMap::new(), arg))
-                        .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
-                )]),
+            ProcX::Call(name, args) => Ok(vector![ProcState::Call(
+                name.clone(),
+                args.iter()
+                    .map(|arg| self.eval_term(&HashMap::new(), arg))
+                    .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
+            )]),
             ProcX::Par(left, right) => {
                 let mut left_procs = self.decompose_parallels(left)?;
                 let right_procs = self.decompose_parallels(right)?;
                 left_procs.append(right_procs);
                 Ok(left_procs)
-            },
-            _ => SpannedError::new_err(format!("expecting parallel composition or process call, got {}", proc)),
+            }
+            _ => SpannedError::new_err(format!(
+                "expecting parallel composition or process call, got {}",
+                proc
+            )),
         }
     }
 
     // TODO: merge with TermX::as_smt_term
-    pub fn eval_term(&self, local: &HashMap<Var, smt::Term>, term: &Term) -> Result<smt::Term, SpannedError> {
+    pub fn eval_term(
+        &self,
+        local: &HashMap<Var, smt::Term>,
+        term: &Term,
+    ) -> Result<smt::Term, SpannedError> {
         match &term.x {
             TermX::Var(v) => local.get(v).cloned().ok_or(SpannedError::spanned(
                 &term.span,
@@ -311,18 +330,21 @@ impl Configuration {
     /**
      * Read the value of the mutable reference
      */
-    fn eval_mut_ref_read(&self, local: &HashMap<Var, smt::Term>, mut_ref: &MutReference) -> Result<smt::Term, SpannedError> {
+    fn eval_mut_ref_read(
+        &self,
+        local: &HashMap<Var, smt::Term>,
+        mut_ref: &MutReference,
+    ) -> Result<smt::Term, SpannedError> {
         match &mut_ref.x {
             MutReferenceX::Base(name) => self.muts.get(name).cloned().ok_or(SpannedError::spanned(
                 &mut_ref.span,
                 format!("mutable {} not found", name),
             )),
             MutReferenceX::Deref(..) => unimplemented!("dereference"),
-            MutReferenceX::Index(mut_ref, idx) =>
-                Ok(smt::TermX::select(
-                    self.eval_mut_ref_read(local, mut_ref)?,
-                    self.eval_term(local, idx)?,
-                )),
+            MutReferenceX::Index(mut_ref, idx) => Ok(smt::TermX::select(
+                self.eval_mut_ref_read(local, mut_ref)?,
+                self.eval_term(local, idx)?,
+            )),
             MutReferenceX::Slice(..) => unimplemented!("slice"),
         }
     }
@@ -337,25 +359,33 @@ impl Configuration {
      * (store (select A a) b
      * (store (select (select A a) b) c x)))
      */
-    fn eval_mut_ref_write(&self, local: &HashMap<Var, smt::Term>, mut_ref: &MutReference, value: &smt::Term) -> Result<(MutName, smt::Term), SpannedError> {
+    fn eval_mut_ref_write(
+        &self,
+        local: &HashMap<Var, smt::Term>,
+        mut_ref: &MutReference,
+        value: &smt::Term,
+    ) -> Result<(MutName, smt::Term), SpannedError> {
         match &mut_ref.x {
             MutReferenceX::Base(name) => Ok((name.clone(), value.clone())),
             MutReferenceX::Deref(..) => unimplemented!("dereference"),
-            MutReferenceX::Index(mut_ref, idx) => {
-                self.eval_mut_ref_write(
-                    local, mut_ref,
-                    &smt::TermX::store(
-                        self.eval_mut_ref_read(local, mut_ref)?,
-                        self.eval_term(local, idx)?,
-                        value,
-                    ),
-                )
-            },
+            MutReferenceX::Index(mut_ref, idx) => self.eval_mut_ref_write(
+                local,
+                mut_ref,
+                &smt::TermX::store(
+                    self.eval_mut_ref_read(local, mut_ref)?,
+                    self.eval_term(local, idx)?,
+                    value,
+                ),
+            ),
             MutReferenceX::Slice(..) => unimplemented!("slice"),
         }
     }
 
-    fn eval_proc(&self, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
+    fn eval_proc(
+        &self,
+        local: &mut HashMap<Var, smt::Term>,
+        proc: &Proc,
+    ) -> Result<Vector<ProcEvalResult>, Error> {
         self.clone().eval_proc_helper(self, local, proc)
     }
 
@@ -366,63 +396,94 @@ impl Configuration {
      * - Blocked recv/send
      * (without checking feasibility of path conditions)
      */
-    fn eval_proc_helper(mut self, old_config: &Configuration, local: &mut HashMap<Var, smt::Term>, proc: &Proc) -> Result<Vector<ProcEvalResult>, Error> {
+    fn eval_proc_helper(
+        mut self,
+        old_config: &Configuration,
+        local: &mut HashMap<Var, smt::Term>,
+        proc: &Proc,
+    ) -> Result<Vector<ProcEvalResult>, Error> {
         match &proc.x {
             ProcX::Skip => Ok(vector![ProcEvalResult::Full(ProcState::End, self)]),
 
             ProcX::Send(name, term, cont) => {
                 let value = self.eval_term(local, term)?;
-                let chan = self.chans.get_mut(name).ok_or(format!("channel {} not found", name))?;
+                let chan = self
+                    .chans
+                    .get_mut(name)
+                    .ok_or(format!("channel {} not found", name))?;
                 if chan.push(value) {
                     Ok(self.eval_proc_helper(old_config, local, cont)?)
                 } else {
                     // Blocked
-                    let new_path_conditions = self.path_conditions.split_off(old_config.path_conditions.len());
-                    Ok(vector![ProcEvalResult::Partial(proc.clone(), self, new_path_conditions)])
+                    let new_path_conditions = self
+                        .path_conditions
+                        .split_off(old_config.path_conditions.len());
+                    Ok(vector![ProcEvalResult::Partial(
+                        proc.clone(),
+                        self,
+                        new_path_conditions
+                    )])
                 }
-            },
+            }
 
             ProcX::Recv(name, var, cont) => {
-                let chan = self.chans.get_mut(name).ok_or(format!("channel {} not found", name))?;
+                let chan = self
+                    .chans
+                    .get_mut(name)
+                    .ok_or(format!("channel {} not found", name))?;
                 match chan.pop() {
                     None => {
-                        let new_path_conditions = self.path_conditions.split_off(old_config.path_conditions.len());
-                        Ok(vector![ProcEvalResult::Partial(proc.clone(), self, new_path_conditions)])
-                    },
+                        let new_path_conditions = self
+                            .path_conditions
+                            .split_off(old_config.path_conditions.len());
+                        Ok(vector![ProcEvalResult::Partial(
+                            proc.clone(),
+                            self,
+                            new_path_conditions
+                        )])
+                    }
                     Some(value) => {
                         local.insert(var.clone(), value);
                         Ok(self.eval_proc_helper(old_config, local, cont)?)
                     }
                 }
-            },
+            }
 
             ProcX::Write(mut_ref, term, cont) => {
-                let (name, updated) = self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
+                let (name, updated) =
+                    self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
                 self.muts.insert(name, updated);
                 Ok(self.eval_proc_helper(old_config, local, cont)?)
-            },
+            }
 
             ProcX::Read(mut_ref, var, cont) => {
                 let value = self.eval_mut_ref_read(local, mut_ref)?;
                 local.insert(var.clone(), value);
                 Ok(self.eval_proc_helper(old_config, local, cont)?)
-            },
+            }
 
             ProcX::Ite(t, p1, p2) => {
                 let mut copy = self.clone();
                 let mut local_copy = local.clone();
                 self.path_conditions.push_back(self.eval_term(local, t)?);
-                copy.path_conditions.push_back(smt::TermX::not(self.eval_term(local, t)?));
-                Ok(self.eval_proc_helper(old_config, local, p1)? + copy.eval_proc_helper(old_config, &mut local_copy, p2)?)
-            },
+                copy.path_conditions
+                    .push_back(smt::TermX::not(self.eval_term(local, t)?));
+                Ok(self.eval_proc_helper(old_config, local, p1)?
+                    + copy.eval_proc_helper(old_config, &mut local_copy, p2)?)
+            }
 
-            ProcX::Call(name, args) =>
-                Ok(vector![ProcEvalResult::Full(ProcState::Call(
+            ProcX::Call(name, args) => Ok(vector![ProcEvalResult::Full(
+                ProcState::Call(
                     name.clone(),
-                    args.iter().map(|arg| self.eval_term(local, arg))
+                    args.iter()
+                        .map(|arg| self.eval_term(local, arg))
                         .collect::<Result<Vector<smt::Term>, SpannedError>>()?,
-                ), self)]),
-            ProcX::Par(..) => Err(format!("parallel composition only allowed at the top level"))?,
+                ),
+                self
+            )]),
+            ProcX::Par(..) => Err(format!(
+                "parallel composition only allowed at the top level"
+            ))?,
         }
     }
 
@@ -432,7 +493,10 @@ impl Configuration {
             ProcState::Call(proc_name, proc_args) => {
                 let mut local = HashMap::new();
 
-                let proc_decl = self.ctx.procs.get(proc_name)
+                let proc_decl = self
+                    .ctx
+                    .procs
+                    .get(proc_name)
                     .ok_or(format!("process {} not found", proc_name))?;
 
                 assert!(proc_decl.params.len() == proc_args.len());
@@ -478,21 +542,22 @@ impl Configuration {
 
                 // If the results are all partial, then none of the branches can make progress until a call
                 // so we just move on to the next process while restoring the path conditions
-                if results.iter().all(|r| match r { ProcEvalResult::Partial(..) => true, _ => false, }) {
+                if results.iter().all(|r| match r {
+                    ProcEvalResult::Partial(..) => true,
+                    _ => false,
+                }) {
                     continue;
                 }
 
                 // All partial branches can be merged together, with the new path condition being the disjunction
                 // of new path conditions in each partial branch
-                let partial_condition = smt::TermX::or(
-                    results.iter().filter_map(|r| match r {
-                        // Take the conjunction of all new path conditions (compared to config.path_conditions)
-                        ProcEvalResult::Partial(_, _, new_path_conditions) => Some(
-                            smt::TermX::and(new_path_conditions)
-                        ),
-                        _ => None,
-                    })
-                );
+                let partial_condition = smt::TermX::or(results.iter().filter_map(|r| match r {
+                    // Take the conjunction of all new path conditions (compared to config.path_conditions)
+                    ProcEvalResult::Partial(_, _, new_path_conditions) => {
+                        Some(smt::TermX::and(new_path_conditions))
+                    }
+                    _ => None,
+                }));
 
                 // Other full/end results can be collected into stepped_branches
                 let mut has_partial = false;
@@ -501,8 +566,9 @@ impl Configuration {
                         ProcEvalResult::Full(new_proc_state, mut new_config) => {
                             // Update process state
                             new_config.procs[i] = new_proc_state;
-                            stepped_branches.push_back(StepResult::Step(proc_name.clone(), new_config));
-                        },
+                            stepped_branches
+                                .push_back(StepResult::Step(proc_name.clone(), new_config));
+                        }
                         _ => {
                             has_partial = true;
                         }
@@ -546,11 +612,16 @@ impl fmt::Display for ChanState {
 impl fmt::Display for ProcState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ProcState::Call(name, args) => write!(f, "{}({})",
+            ProcState::Call(name, args) => write!(
+                f,
+                "{}({})",
                 name,
-                args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")
+                args.iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
-            ProcState::End => write!(f, "skip")
+            ProcState::End => write!(f, "skip"),
         }
     }
 }
@@ -571,7 +642,15 @@ impl fmt::Display for Configuration {
             writeln!(f, "  chan {} => {}", name, self.chans[name])?;
         }
 
-        writeln!(f, "  proc {}", self.procs.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" || "))?;
+        writeln!(
+            f,
+            "  proc {}",
+            self.procs
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(" || ")
+        )?;
 
         for condition in self.path_conditions.iter() {
             writeln!(f, "  constraint {}", condition)?;
