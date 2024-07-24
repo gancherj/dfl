@@ -555,6 +555,7 @@ impl ModelChecker {
                 for result in abs_pattern.step_one_proc()? {
                     match result {
                         StepResult::Step(_, new_config) => {
+                            self.smt_ctx.flush(solver)?;
                             if new_config.feasible(solver)? == smt::CheckSatResult::Sat {
                                 // Found a feasible step
                                 let shape_idx = self.get_shape_index(&new_config)?;
@@ -584,6 +585,7 @@ impl ModelChecker {
         &mut self,
         solver: &mut smt::Solver,
     ) -> Result<Option<Vec<ProcName>>, Error> {
+        self.smt_ctx.flush(solver)?;
         for shape_abs in self.shapes.values() {
             if let Some(pattern) = &shape_abs.pattern {
                 let cycle = pattern.find_wait_cycle(solver)?;

@@ -2,10 +2,34 @@ use std::fmt;
 use std::rc::Rc;
 
 use im::{vector, HashMap, Vector};
+use indexmap::IndexSet;
 
 use crate::ast::*;
 use crate::error::{Error, SpannedError};
 use crate::smt;
+
+/**
+ * All references, no matter their types, are using sort Ref
+ *
+ * We have overloaded functions (for any T in { Int, BV })
+ * (declare-fun ref_index (Ref T) Ref)
+ * (declare-fun ref_offset (Ref T) Ref)
+ *
+ * (declare-fun ref_read (<all mutables> Ref) T)
+ *
+ * For each mutable M
+ * (declare-fun ref_write_M (<all mutables> Ref T) <type of M>)
+ * (declare-const ref_base_M Ref)
+ *
+ * We leave these functions uninterpreted for now
+ * For more exact semantics, we can axiomatize them separately
+ */
+const SMT_ENCODING_REF_SORT: &str = "Ref";
+const SMT_ENCODING_REF_INDEX: &str = "ref_index";
+const SMT_ENCODING_REF_OFFSET: &str = "ref_offset";
+const SMT_ENCODING_REF_READ: &str = "ref_read";
+const SMT_ENCODING_REF_WRITE: &str = "ref_write_";
+const SMT_ENCODING_REF_BASE: &str = "ref_base_";
 
 #[derive(Debug, Clone)]
 pub struct ChanState {
@@ -68,7 +92,7 @@ impl TermTypeX {
     pub fn as_smt_sort(&self) -> smt::Sort {
         match self {
             TermTypeX::Base(typ) => typ.as_smt_sort(),
-            TermTypeX::Ref(..) => unimplemented!("reference"),
+            TermTypeX::Ref(..) => smt::SortX::id(SMT_ENCODING_REF_SORT),
         }
     }
 }
@@ -130,6 +154,58 @@ impl ChanState {
  */
 
 impl Configuration {
+    /**
+     * Add SMT prelude to the encoding context (including declarations for
+     * functions related to references)
+     *
+     * This should only be called once for each context
+     */
+
+//      * We have overloaded functions (for any T in { Int, BV })
+//  * (declare-fun ref_index (Ref T) Ref)
+//  * (declare-fun ref_offset (Ref T) Ref)
+//  *
+//  * (declare-fun ref_read (<all mutables> Ref) T)
+//  *
+//  * For each mutable M
+//  * (declare-fun ref_write_M (<all mutables> Ref T) <type of M>)
+//  * (declare-const ref_base_M Ref)
+//  *
+    pub fn gen_smt_prelude(ctx: &Ctx) -> Result<Vec<smt::Command>, Error> {
+        let mut cmds = vec![
+            smt::CommandX::declare_sort(SMT_ENCODING_REF_SORT, 0),
+        ];
+        let ref_sort = smt::SortX::id(SMT_ENCODING_REF_SORT);
+
+        // A list of SMT sorts of all mutables
+        let mutable_sorts =
+            ctx.muts.values().map(|decl| decl.typ.as_smt_sort()).collect::<Vec<_>>();
+
+        // A set of SMT sorts of base types of mutables
+        let mutable_base_sorts =
+            ctx.muts.values().map(|decl| decl.typ.get_base().as_smt_sort()).collect::<IndexSet<_>>();
+
+        for base_sort in mutable_base_sorts.iter() {
+            cmds.push(smt::CommandX::declare_fun(SMT_ENCODING_REF_INDEX, [ &ref_sort, base_sort ], &ref_sort));
+            cmds.push(smt::CommandX::declare_fun(SMT_ENCODING_REF_OFFSET, [ &ref_sort, base_sort ], &ref_sort));
+            cmds.push(smt::CommandX::declare_fun(SMT_ENCODING_REF_READ, mutable_sorts.iter().chain([ &ref_sort ]), base_sort));
+
+            for decl in ctx.muts.values() {
+                cmds.push(smt::CommandX::declare_fun(
+                    &format!("{}{}", SMT_ENCODING_REF_WRITE, decl.name),
+                    mutable_sorts.iter().chain([ &ref_sort, base_sort ]),
+                    decl.typ.as_smt_sort(),
+                ));
+            }
+
+            for decl in ctx.muts.values() {
+                cmds.push(smt::CommandX::declare_const(&format!("{}{}", SMT_ENCODING_REF_BASE, decl.name), &ref_sort));
+            }
+        }
+
+        Ok(cmds)
+    }
+
     /**
      * Create an initial configuration based on a context and entry process
      */
@@ -210,6 +286,29 @@ impl Configuration {
         }
     }
 
+    pub fn eval_mut_ref(
+        &self,
+        local: &HashMap<Var, smt::Term>,
+        mut_ref: &MutReference,
+    ) -> Result<smt::Term, SpannedError>
+    {
+        match &mut_ref.x {
+            MutReferenceX::Base(name) => Ok(smt::TermX::var(format!("{}{}", SMT_ENCODING_REF_BASE, name))),
+            MutReferenceX::Deref(term) => self.eval_term(local, term),
+            MutReferenceX::Index(base, idx) =>
+                Ok(smt::TermX::app(
+                    SMT_ENCODING_REF_INDEX,
+                    [self.eval_mut_ref(local, base)?, self.eval_term(local, idx)?],
+                )),
+            MutReferenceX::Slice(base, None, ..) => self.eval_mut_ref(local, base),
+            MutReferenceX::Slice(base, Some(offset), ..) =>
+                Ok(smt::TermX::app(
+                    SMT_ENCODING_REF_OFFSET,
+                    [self.eval_mut_ref(local, base)?, self.eval_term(local, offset)?],
+                )),
+        }
+    }
+
     // TODO: merge with TermX::as_smt_term
     pub fn eval_term(
         &self,
@@ -234,7 +333,7 @@ impl Configuration {
                 }
             }
             TermX::BitVec(i, w) => Ok(smt::TermX::bit_vec(*i, *w)),
-            TermX::Ref(..) => unimplemented!("reference"),
+            TermX::Ref(mut_ref) => self.eval_mut_ref(local, mut_ref),
             TermX::Add(t1, t2) => Ok(smt::TermX::add(
                 self.eval_term(local, t1)?,
                 self.eval_term(local, t2)?,
@@ -335,18 +434,14 @@ impl Configuration {
         local: &HashMap<Var, smt::Term>,
         mut_ref: &MutReference,
     ) -> Result<smt::Term, SpannedError> {
-        match &mut_ref.x {
-            MutReferenceX::Base(name) => self.muts.get(name).cloned().ok_or(SpannedError::spanned(
-                &mut_ref.span,
-                format!("mutable {} not found", name),
-            )),
-            MutReferenceX::Deref(..) => unimplemented!("dereference"),
-            MutReferenceX::Index(mut_ref, idx) => Ok(smt::TermX::select(
-                self.eval_mut_ref_read(local, mut_ref)?,
-                self.eval_term(local, idx)?,
-            )),
-            MutReferenceX::Slice(..) => unimplemented!("slice"),
-        }
+        Ok(smt::TermX::app(
+            SMT_ENCODING_REF_READ,
+            // TODO: error if keys not found?
+            // All mutables followed by the reference
+            self.ctx.muts.keys().filter_map(|name| {
+                self.muts.get(name).cloned()
+            }).chain([self.eval_mut_ref(local, mut_ref)?]),
+        ))
     }
 
     /**
@@ -360,25 +455,25 @@ impl Configuration {
      * (store (select (select A a) b) c x)))
      */
     fn eval_mut_ref_write(
-        &self,
+        &mut self,
         local: &HashMap<Var, smt::Term>,
         mut_ref: &MutReference,
         value: &smt::Term,
-    ) -> Result<(MutName, smt::Term), SpannedError> {
-        match &mut_ref.x {
-            MutReferenceX::Base(name) => Ok((name.clone(), value.clone())),
-            MutReferenceX::Deref(..) => unimplemented!("dereference"),
-            MutReferenceX::Index(mut_ref, idx) => self.eval_mut_ref_write(
-                local,
-                mut_ref,
-                &smt::TermX::store(
-                    self.eval_mut_ref_read(local, mut_ref)?,
-                    self.eval_term(local, idx)?,
-                    value,
-                ),
-            ),
-            MutReferenceX::Slice(..) => unimplemented!("slice"),
+    ) -> Result<(), SpannedError> {
+        let mut_ref_smt = self.eval_mut_ref(local, mut_ref)?;
+        for name in self.ctx.muts.keys() {
+            self.muts.insert(name.clone(), smt::TermX::app(
+                format!("{}{}", SMT_ENCODING_REF_WRITE, name),
+                // All mutables followed by the reference and the updated value
+                self.ctx.muts.keys().map(|name| {
+                    self.muts.get(name).unwrap().clone()
+                }).chain([
+                    mut_ref_smt.clone(),
+                    value.clone(),
+                ]),
+            ));
         }
+        Ok(())
     }
 
     fn eval_proc(
@@ -450,9 +545,10 @@ impl Configuration {
             }
 
             ProcX::Write(mut_ref, term, cont) => {
-                let (name, updated) =
-                    self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
-                self.muts.insert(name, updated);
+                // let (name, updated) =
+                //     self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
+                // self.muts.insert(name, updated);
+                self.eval_mut_ref_write(local, mut_ref, &self.eval_term(local, term)?)?;
                 Ok(self.eval_proc_helper(old_config, local, cont)?)
             }
 

@@ -987,6 +987,13 @@ impl MutTypeX {
             MutTypeX::Array(_, t) => t.get_dimensions() + 1,
         }
     }
+
+    pub fn get_base(&self) -> BaseType {
+        match self {
+            MutTypeX::Base(base) => base.clone(),
+            MutTypeX::Array(_, t) => t.get_base(),
+        }
+    }
 }
 
 impl MutReferenceX {

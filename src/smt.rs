@@ -14,16 +14,18 @@ use std::rc::Rc;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
+use crate::error::Error;
 use crate::error::SolverError;
 use crate::BitVecWidth;
 
 pub type Sort = Rc<SortX>;
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(Eq, PartialEq, Clone, Debug, Hash)]
 pub enum SortX {
     Int,
     Bool,
     BitVec(BitVecWidth),
     Array(Sort, Sort),
+    Id(Ident),
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -50,6 +52,13 @@ pub enum TermX {
     Bool(bool),
     App(Term, Vec<Term>),
     Quant(QuantKind, Vec<SortedVar>, Term),
+}
+
+pub type SortDecl = Rc<SortDeclX>;
+#[derive(Debug)]
+pub struct SortDeclX {
+    pub name: Ident,
+    pub arity: usize,
 }
 
 pub type VarDecl = Rc<VarDeclX>;
@@ -117,6 +126,7 @@ pub type Command = Rc<CommandX>;
 pub enum CommandX {
     Push,
     Pop,
+    DeclareSort(SortDecl),
     DeclareConst(VarDecl),
     DeclareFun(FunDecl),
     DefineFun(FunDefn),
@@ -177,6 +187,36 @@ impl EncodingCtx {
     //         }));
     //     }
     //     name
+    // }
+
+    // pub fn declare_sort(&mut self, name: impl Into<Ident>, arity: usize) -> Result<(), Error> {
+    //     let name = name.into();
+    //     if self.decls.contains_key(&name) {
+    //         // TODO: more strict than actually enforced
+    //         Err(format!("symbol {} already declared", name))?;
+    //     }
+    //     self.decls.insert(name.clone(), CommandX::declare_sort(name, arity));
+    //     Ok(())
+    // }
+
+    // pub fn declare_const(&mut self, name: impl Into<Ident>, sort: Sort) -> Result<(), Error> {
+    //     let name = name.into();
+    //     if self.decls.contains_key(&name) {
+    //         // TODO: more strict than actually enforced
+    //         Err(format!("symbol {} already declared", name))?;
+    //     }
+    //     self.decls.insert(name.clone(), CommandX::declare_const(name, sort));
+    //     Ok(())
+    // }
+
+    // pub fn declare_fun(&mut self, name: impl Into<Ident>, inputs: impl IntoIterator<Item = Sort>, sort: Sort) -> Result<(), Error> {
+    //     let name = name.into();
+    //     if self.decls.contains_key(&name) {
+    //         // TODO: more strict than actually enforced
+    //         Err(format!("symbol {} already declared", name))?;
+    //     }
+    //     self.decls.insert(name.clone(), CommandX::declare_const(name, sort));
+    //     Ok(())
     // }
 
     /// Find the next fresh name
@@ -295,6 +335,10 @@ impl SortX {
 
     pub fn array(idx: impl Borrow<Sort>, value: impl Borrow<Sort>) -> Sort {
         Rc::new(SortX::Array(idx.borrow().clone(), value.borrow().clone()))
+    }
+
+    pub fn id(id: impl Into<Ident>) -> Sort {
+        Rc::new(SortX::Id(id.into()))
     }
 }
 
@@ -590,36 +634,43 @@ impl CommandX {
         Rc::new(CommandX::Pop)
     }
 
-    pub fn declare_const(id: impl Into<Ident>, sort: Sort) -> Command {
-        Rc::new(CommandX::DeclareConst(Rc::new(VarDeclX {
+    pub fn declare_sort(id: impl Into<Ident>, arity: usize) -> Command {
+        Rc::new(CommandX::DeclareSort(Rc::new(SortDeclX {
             name: id.into(),
-            sort: sort,
+            arity: arity,
         })))
     }
 
-    pub fn declare_var(id: impl Into<Ident>, sort: Sort) -> Command {
+    pub fn declare_const(id: impl Into<Ident>, sort: impl Borrow<Sort>) -> Command {
+        Rc::new(CommandX::DeclareConst(Rc::new(VarDeclX {
+            name: id.into(),
+            sort: sort.borrow().clone(),
+        })))
+    }
+
+    pub fn declare_var(id: impl Into<Ident>, sort: impl Borrow<Sort>) -> Command {
         Rc::new(CommandX::DeclareVar(Rc::new(VarDeclX {
             name: id.into(),
-            sort: sort,
+            sort: sort.borrow().clone(),
         })))
     }
 
     pub fn declare_fun(
         id: impl Into<Ident>,
-        inputs: impl IntoIterator<Item = Sort>,
-        sort: Sort,
+        inputs: impl IntoIterator<Item = impl Borrow<Sort>>,
+        sort: impl Borrow<Sort>,
     ) -> Command {
         Rc::new(CommandX::DeclareFun(Rc::new(FunDeclX {
             name: id.into(),
-            inputs: inputs.into_iter().collect(),
-            sort: sort,
+            inputs: inputs.into_iter().map(|i| i.borrow().clone()).collect(),
+            sort: sort.borrow().clone(),
         })))
     }
 
     pub fn define_fun(
         id: impl Into<Ident>,
-        inputs: impl IntoIterator<Item = (impl Into<Ident>, Sort)>,
-        sort: Sort,
+        inputs: impl IntoIterator<Item = (impl Into<Ident>, impl Borrow<Sort>)>,
+        sort: impl Borrow<Sort>,
         body: impl Borrow<Term>,
     ) -> Command {
         Rc::new(CommandX::DefineFun(Rc::new(FunDefnX {
@@ -628,18 +679,18 @@ impl CommandX {
                 .into_iter()
                 .map(|(i, s)| SortedVar {
                     name: i.into(),
-                    sort: s,
+                    sort: s.borrow().clone(),
                 })
                 .collect(),
-            sort: sort,
+            sort: sort.borrow().clone(),
             body: body.borrow().clone(),
         })))
     }
 
     pub fn synth_fun(
         id: impl Into<Ident>,
-        inputs: impl IntoIterator<Item = (impl Into<Ident>, Sort)>,
-        sort: Sort,
+        inputs: impl IntoIterator<Item = (impl Into<Ident>, impl Borrow<Sort>)>,
+        sort: impl Borrow<Sort>,
         grammar: Option<&SynthFunGrammar>,
     ) -> Command {
         Rc::new(CommandX::SynthFun(Rc::new(SynthFunDeclX {
@@ -648,10 +699,10 @@ impl CommandX {
                 .into_iter()
                 .map(|(v, s)| SortedVar {
                     name: v.into(),
-                    sort: s,
+                    sort: s.borrow().clone(),
                 })
                 .collect(),
-            sort: sort,
+            sort: sort.borrow().clone(),
             grammar: grammar.map(|g| g.clone()),
         })))
     }
@@ -854,6 +905,7 @@ impl fmt::Display for SortX {
             SortX::Bool => write!(f, "Bool"),
             SortX::BitVec(width) => write!(f, "(_ BitVec {})", width),
             SortX::Array(idx, value) => write!(f, "(Array {} {})", idx, value),
+            SortX::Id(id) => write!(f, "{}", id),
         }
     }
 }
@@ -1002,6 +1054,7 @@ impl fmt::Display for CommandX {
         match self {
             CommandX::Push => write!(f, "(push)"),
             CommandX::Pop => write!(f, "(pop)"),
+            CommandX::DeclareSort(decl) => write!(f, "(declare-sort {} {})", decl.name, decl.arity),
             CommandX::DeclareConst(decl) => write!(f, "(declare-const {})", decl),
             CommandX::DeclareFun(decl) => write!(f, "(declare-fun {})", decl),
             CommandX::DefineFun(defn) => write!(f, "(define-fun {})", defn),

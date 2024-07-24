@@ -20,6 +20,7 @@ use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide:
 
 use clap::{command, Parser};
 use error::SpannedError;
+use execution::Configuration;
 use lalrpop_util::lalrpop_mod;
 use mc::ModelChecker;
 use riptide::TranslationOptions;
@@ -132,6 +133,11 @@ fn type_check(args: Args) -> Result<(), Error> {
         let mut mc = ModelChecker::new(&ctx);
         let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
         solver.set_logic("ALL")?;
+
+        for cmd in Configuration::gen_smt_prelude(&ctx)? {
+            // println!("{}", cmd);
+            solver.send_command(cmd)?;
+        }
 
         mc.compute_reachable_shapes(&mut solver, "Program", 1)?;
 

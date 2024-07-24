@@ -919,7 +919,7 @@ impl PermJudgmentX {
 
         // Send a dummy synth-fun to enable feasibility checking even when there is no
         // permission variable
-        let empty_sorts: Vec<(&str, _)> = vec![];
+        let empty_sorts: Vec<(&str, smt::Sort)> = vec![];
         solver.send_command(smt::CommandX::synth_fun(
             "dummy",
             empty_sorts,
