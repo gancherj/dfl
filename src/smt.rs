@@ -816,6 +816,11 @@ impl Solver {
 
             output.push_str(&buf);
 
+            if let Some(log) = &mut self.options.log {
+                write!(log, "; SMT output: {}", buf)?;
+                log.flush()?;
+            }
+
             for c in buf.chars() {
                 if c == '(' {
                     num_open_paren += 1;

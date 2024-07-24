@@ -22,7 +22,7 @@ use clap::{command, Parser};
 use error::SpannedError;
 use execution::Configuration;
 use lalrpop_util::lalrpop_mod;
-use mc::ModelChecker;
+use mc::{ModelChecker, PredicateX};
 use riptide::TranslationOptions;
 use smt::SolverOptions;
 use span::{FilePath, Source};
@@ -130,7 +130,13 @@ fn type_check(args: Args) -> Result<(), Error> {
                 None => None,
             },
         };
-        let mut mc = ModelChecker::new(&ctx);
+        let mut mc = ModelChecker::new(&ctx, [
+            // Whether a boolean value is true or false
+            // Rc::new(PredicateX { typ: TermTypeX::bool(), var: "x".into(), term: smt::TermX::var("x") }),
+
+            // Whether an integer is 0 or not
+            Rc::new(PredicateX { typ: TermTypeX::int(), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::int(0)) }),
+        ]);
         let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
         solver.set_logic("ALL")?;
 

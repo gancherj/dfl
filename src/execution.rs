@@ -125,6 +125,10 @@ impl ChanState {
     pub fn values(&self) -> impl Iterator<Item = &smt::Term> {
         self.queue.iter()
     }
+
+    pub fn get(&self, idx: usize) -> Option<&smt::Term> {
+        self.queue.get(idx)
+    }
 }
 
 /**
@@ -613,6 +617,7 @@ impl Configuration {
         solver.push()?;
 
         for condition in self.path_conditions.iter() {
+            // println!("condition: {}", condition);
             solver.assert(condition)?;
         }
 

@@ -1,4 +1,5 @@
 use core::fmt;
+use std::char;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -27,7 +28,33 @@ type ShapeIndex = usize;
 struct ShapeAbstraction {
     shape: Rc<Shape>,
     pattern: Option<Configuration>,
-    examples: Vec<Configuration>,
+    constraints: Vec<AbsConstraint>, // preds satisfied by each variable in the pattern
+}
+
+struct AbsConstraint {
+    term: smt::Term,
+    valid_preds: Vec<(Predicate, PredValidity)>,
+}
+
+enum PredValidity {
+    Valid, // Predicate is proven true
+    Invalid, // Predicate is proven false
+    Unknown,
+}
+
+pub type Predicate = Rc<PredicateX>;
+#[derive(Clone, Eq, PartialEq, Debug)]
+/// Unary preds to be learned about variables in an abstraction
+pub struct PredicateX {
+    pub typ: TermType,
+    pub var: smt::Ident,
+    pub term: smt::Term,
+}
+
+type PredSet = Rc<PredSetX>;
+#[derive(Clone)]
+pub struct PredSetX {
+    pub preds: Vec<Predicate>,
 }
 
 pub struct ModelChecker {
@@ -37,6 +64,8 @@ pub struct ModelChecker {
     shape_indices: HashMap<Rc<Shape>, ShapeIndex>,
     index_to_shape: Vec<Rc<Shape>>,
     changed_shapes: IndexSet<ShapeIndex>,
+
+    preds: PredSet,
 
     // All reachable shapes
     shapes: HashMap<ShapeIndex, ShapeAbstraction>,
@@ -242,7 +271,7 @@ impl Configuration {
                             let result = solver.check_sat()?;
                             solver.pop()?;
 
-                            if result == smt::CheckSatResult::Sat {
+                            if result != smt::CheckSatResult::Unsat {
                                 // Found a feasible cycle
                                 return Ok(Some(
                                     ancestor
@@ -343,13 +372,125 @@ impl Configuration {
     }
 }
 
+impl PredicateX {
+    fn app(&self, term: &smt::Term) -> smt::Term {
+        smt::TermX::substitute(&self.term, &im::HashMap::from(vec![(self.var.clone(), term.clone())]))
+    }
+}
+
+impl AbsConstraint {
+    /// Merge with another AbsConstraint
+    /// The resulting one should be the conjunction of these constraints
+    /// Return if the constraints changed
+    fn merge(&mut self, other: &AbsConstraint) -> bool {
+        assert!(self.term == other.term);
+        assert!(self.valid_preds.len() == other.valid_preds.len());
+
+        let mut changed = false;
+
+        for (valid1, valid2) in self.valid_preds.iter_mut().zip(other.valid_preds.iter()) {
+            assert!(valid1.0 == valid2.0);
+
+            match (&valid1.1, &valid2.1) {
+                // Same results, no change
+                (PredValidity::Valid, PredValidity::Valid) => {}
+                (PredValidity::Invalid, PredValidity::Invalid) => {}
+
+                // If the constraint is already unknown, no change in the conjunction
+                (PredValidity::Unknown, _) => {}
+
+                // Otherwise, the results are different, we change the return to Unknown
+                _ => {
+                    changed = true;
+                    *valid1 = (valid1.0.clone(), PredValidity::Unknown);
+                }
+            }
+        }
+
+        changed
+    }
+
+    /// Encode AbsConstraint as a list of SMT constraint (conjunction)
+    fn as_smt<'a>(&'a self) -> impl Iterator<Item = smt::Term> + 'a {
+        self.valid_preds.iter()
+            // Map each predicate validity to either the predicate, its negation, or nothing
+            .filter_map(|(pred, valid)|
+                match valid {
+                    PredValidity::Valid => Some(pred.app(&self.term)),
+                    PredValidity::Invalid => Some(smt::TermX::not(pred.app(&self.term))),
+                    PredValidity::Unknown => None,
+                }
+            )
+    }
+}
+
 impl ShapeAbstraction {
     fn new(shape: &Rc<Shape>) -> ShapeAbstraction {
         ShapeAbstraction {
             shape: shape.clone(),
             pattern: None,
-            examples: Vec::new(),
+            constraints: Vec::new(),
         }
+    }
+
+    /**
+     * First restrict predicate set to term type `typ`,
+     * and then test each predicates against examples.
+     *
+     * Examples are provided in the format [ (path condition, term) ]
+     *
+     * Return the validity of each predicate
+     */
+    fn check_pred_validity(solver: &mut smt::Solver, preds: &PredSet, typ: &TermType, examples: &Vec<(&smt::Term, &smt::Term)>) -> Result<Vec<(Predicate, PredValidity)>, Error> {
+        let mut validity = Vec::new();
+
+        for pred in preds.preds.iter() {
+            if pred.typ == *typ {
+                // Only check predicates with the matching term type
+
+                // Assert (the negation of) predicate holds for each example
+                solver.push()?;
+                solver.assert(smt::TermX::not(smt::TermX::and(
+                    examples.iter().map(|(path_condition, term)| {
+                        smt::TermX::implies(*path_condition, pred.app(term))
+                    })
+                )))?;
+                let result = solver.check_sat()?;
+                solver.pop()?;
+
+                if result == smt::CheckSatResult::Unsat {
+                    // Unsat => the predicate is valid for all examples
+                    // println!("predicate {:?} is valid: {}", pred, smt::TermX::not(smt::TermX::and(
+                    //     examples.iter().map(|(path_condition, term)| {
+                    //         smt::TermX::implies(*path_condition, pred.app(term))
+                    //     })
+                    // )));
+                    validity.push((pred.clone(), PredValidity::Valid));
+                    continue;
+                }
+
+                // Check if the negation of the predicate is valid
+                solver.push()?;
+                solver.assert(smt::TermX::not(smt::TermX::and(
+                    examples.iter().map(|(path_condition, term)| {
+                        smt::TermX::implies(*path_condition, smt::TermX::not(pred.app(term)))
+                    })
+                )))?;
+                let result = solver.check_sat()?;
+                solver.pop()?;
+
+                if result == smt::CheckSatResult::Unsat {
+                    // Unsat => the predicate is valid for all examples
+                    validity.push((pred.clone(), PredValidity::Invalid));
+                    continue;
+                }
+
+                // Otherwise, the predicate may or may not hold on all examples
+                validity.push((pred.clone(), PredValidity::Unknown));
+            }
+        }
+
+        Ok(validity)
     }
 
     /**
@@ -362,19 +503,20 @@ impl ShapeAbstraction {
         &mut self,
         smt_ctx: &mut smt::EncodingCtx,
         solver: &mut smt::Solver,
+        preds: &PredSet,
         mut new_configs: Vec<Configuration>,
     ) -> Result<bool, Error> {
-        // 1. Filter out infeasible new configs (|new_configs| queries)
-        // 2. Learn (x == c) predicates at each variable (|size of shape| queries)
-        // 3. Syntactically learn equalities between variables (0 queries)
-        //    (incomplete, but still monotone)
-
         if let Some(first_config) = new_configs.first() {
             // If there are any feasible configurations, continue
 
-            // Naive version: do not learn constraints on the variables
-            if self.pattern.is_none() {
-                let ctx = first_config.ctx.clone();
+            // 1. for each value in the pattern, prove predicate or the negation of each predicate
+            // 2. compare the results to the old pattern
+
+            let ctx = first_config.ctx.clone();
+
+            let pattern = if let Some(pattern) = &mut self.pattern {
+                pattern
+            } else {
                 let mut muts = im::HashMap::new();
                 let mut chans = im::HashMap::new();
                 let mut procs = Vector::new();
@@ -423,26 +565,107 @@ impl ShapeAbstraction {
                     }
                 }
 
-                self.pattern = Some(Configuration {
+                // Flush all new symbols
+                smt_ctx.flush(solver)?;
+
+                let pattern = Configuration {
+                    ctx: ctx.clone(),
+                    consts: first_config.consts.clone(),
                     muts,
                     chans,
                     procs,
                     path_conditions: Vector::new(),
-                    ..new_configs.remove(0)
-                });
+                };
+                self.pattern = Some(pattern);
+                self.pattern.as_mut().unwrap()
+            };
 
-                smt_ctx.flush(solver)?;
+            let path_conditions = new_configs.iter()
+                .map(|config| smt::TermX::and(&config.path_conditions))
+                .collect::<Vec<_>>();
 
+            // Constraints on each variable in the pattern
+            let mut abs_constraints = Vec::new();
+
+            // Test predicates on channel values
+            for (i, decl) in ctx.chans.values().enumerate() {
+                let state = pattern.chans.get(&decl.name)
+                    .ok_or(format!("channel not found"))?;
+
+                // Generate placeholders for each channel value
+                for j in 0..self.shape.chans[i] {
+                    let var = state.get(j).unwrap();
+                    // Collect terms at the same position in new_configs (along with path conditions)
+                    let examples = path_conditions.iter()
+                        .zip(new_configs.iter().map(|config| {
+                            config.chans.get(&decl.name).unwrap().get(j).unwrap()
+                        })).collect::<Vec<_>>();
+
+                    abs_constraints.push(AbsConstraint {
+                        term: var.clone(),
+                        valid_preds: Self::check_pred_validity(solver, preds, &decl.typ, &examples)?,
+                    });
+                }
+            }
+
+            // Test predicates on process states
+            for (i, proc) in pattern.procs.iter().enumerate() {
+                match proc {
+                    ProcState::Call(name, args) => {
+                        for (j, arg) in args.iter().enumerate() {
+                            let decl = ctx.procs.get(name).ok_or(format!("undefined process"))?;
+                            let typ = &decl.params[j].typ;
+
+                            // Collect terms at the same position
+                            let examples = path_conditions.iter()
+                                .zip(new_configs.iter().map(|config| {
+                                    match &config.procs[i] {
+                                        ProcState::Call(_, args) => &args[j],
+                                        ProcState::End => unreachable!(),
+                                    }
+                                })).collect::<Vec<_>>();
+
+                            abs_constraints.push(AbsConstraint {
+                                term: arg.clone(),
+                                valid_preds: Self::check_pred_validity(solver, preds, typ, &examples)?,
+                            });
+                        }
+                    }
+                    ProcState::End => {}
+                }
+            }
+
+            // Compare the new abs_constraints with the old one
+            // If changed, update path conditions and return true
+
+            // If the original constraints are uninitialized, set them to the new ones
+            if self.constraints.len() == 0 {
+                self.constraints = abs_constraints;
+                pattern.path_conditions = self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
+                return Ok(true);
+            }
+
+            // Otherwise merge the constraints
+            assert!(self.constraints.len() == abs_constraints.len());
+            let mut changed = false;
+            for (old, new) in self.constraints.iter_mut().zip(abs_constraints.iter()) {
+                if old.merge(new) {
+                    changed = true;
+                }
+            }
+
+            if changed {
+                pattern.path_conditions = self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
                 return Ok(true);
             }
         }
 
-        return Ok(false);
+        Ok(false)
     }
 }
 
 /**
- * The initial abstraction uses these predicates:
+ * The initial abstraction uses these preds:
  * 1. The number of values in each channel
  * 2. The state of each process
  * 3. x == c for some constant c
@@ -453,13 +676,14 @@ impl ShapeAbstraction {
  * 2. Check if a symbolic configuration is subsumed by an abstraction
  */
 impl ModelChecker {
-    pub fn new(ctx: &Rc<Ctx>) -> ModelChecker {
+    pub fn new(ctx: &Rc<Ctx>, preds: impl IntoIterator<Item = Predicate>) -> ModelChecker {
         ModelChecker {
             ctx: ctx.clone(),
             smt_ctx: smt::EncodingCtx::new("mc"),
             shape_indices: HashMap::new(),
             index_to_shape: Vec::new(),
             changed_shapes: IndexSet::new(),
+            preds: Rc::new(PredSetX { preds: preds.into_iter().collect() }),
             shapes: HashMap::new(),
         }
     }
@@ -502,7 +726,7 @@ impl ModelChecker {
         }
 
         let abs = self.shapes.get_mut(&shape_idx).unwrap();
-        if abs.extend(&mut self.smt_ctx, solver, configs)? {
+        if abs.extend(&mut self.smt_ctx, solver, &self.preds, configs)? {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
 
@@ -554,9 +778,11 @@ impl ModelChecker {
                 // Make one step
                 for result in abs_pattern.step_one_proc()? {
                     match result {
-                        StepResult::Step(_, new_config) => {
+                        StepResult::Step(fired, new_config) => {
                             self.smt_ctx.flush(solver)?;
-                            if new_config.feasible(solver)? == smt::CheckSatResult::Sat {
+                            if new_config.feasible(solver)? != smt::CheckSatResult::Unsat {
+                                println!("fired process: {}", fired);
+
                                 // Found a feasible step
                                 let shape_idx = self.get_shape_index(&new_config)?;
 
@@ -564,6 +790,9 @@ impl ModelChecker {
                                     new_configs.insert(shape_idx, Vec::new());
                                 }
                                 new_configs.get_mut(&shape_idx).unwrap().push(new_config);
+                            } else {
+                                // Found an infeasible step
+                                // println!("infeasible step: {}", new_config);
                             }
                         }
                         StepResult::Terminal(..) => {} // ignore terminal branches
