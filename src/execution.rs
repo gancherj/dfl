@@ -695,6 +695,56 @@ impl Configuration {
 
         Ok(stepped_branches)
     }
+
+    /**
+     * Non-deterministically fire any process until we hit skip or another process call
+     * (similar to step_one_proc but tries all fireable processes)
+     */
+    pub fn step_all_proc(&self) -> Result<Vector<StepResult>, Error> {
+        let mut stepped_branches = Vector::new();
+
+        // Conditions under which no process can make progress
+        let mut terminal_conditions = Vector::new();
+
+        for (i, proc_state) in self.procs.iter().enumerate() {
+            if let ProcState::Call(proc_name, ..) = proc_state {
+                let results = self.eval_proc_state(proc_state)?;
+                assert!(results.len() > 0);
+
+                // All partial branches can be merged together, with the new path condition being the disjunction
+                // of new path conditions in each partial branch
+                let partial_condition = smt::TermX::or(results.iter().filter_map(|r| match r {
+                    // Take the conjunction of all new path conditions (compared to config.path_conditions)
+                    ProcEvalResult::Partial(_, _, new_path_conditions) => {
+                        Some(smt::TermX::and(new_path_conditions))
+                    }
+                    _ => None,
+                }));
+
+                terminal_conditions.push_back(partial_condition);
+
+                // Other full/end results can be collected into stepped_branches
+                for result in results {
+                    match result {
+                        ProcEvalResult::Full(new_proc_state, mut new_config) => {
+                            // Update process state
+                            new_config.procs[i] = new_proc_state;
+                            stepped_branches
+                                .push_back(StepResult::Step(proc_name.clone(), new_config));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Finally, a terminal configuration is added (which might not be feasible)
+        let mut terminal_config = self.clone();
+        terminal_config.path_conditions.extend(terminal_conditions);
+        stepped_branches.push_back(StepResult::Terminal(terminal_config));
+
+        Ok(stepped_branches)
+    }
 }
 
 impl fmt::Display for ChanState {

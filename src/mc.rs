@@ -81,11 +81,6 @@ pub struct ModelChecker {
     shapes: HashMap<ShapeIndex, ShapeAbstraction>,
 }
 
-pub struct Subsumption {
-    pub subst: im::HashMap<smt::Ident, smt::Term>,
-    pub condition: Vec<smt::Term>,
-}
-
 /**
  * In a configuration, a process P has a wait dependency on Q if
  * In the current config, P blocks on recv (send) a channel C,
@@ -314,6 +309,69 @@ impl Configuration {
 
         Ok(None)
     }
+
+    // /**
+    //  * Check if self subsumes the given config via syntactical matching
+    //  * For this to be complete, self must only have distinct variables in it.
+    //  * No expressions or constants are allowed in the configuration (except for the path condition)
+    //  */
+    // fn subsume(&self, solver: &mut smt::Solver, config: &Configuration) -> Result<bool, Error> {
+    //     let mut subst = im::HashMap::new();
+
+    //     // A helper function to match up a variable in the pattern with the other term
+    //     // and collect the mapping to the substitution
+    //     let mut match_terms = |self_term: &smt::Term, other_term: &smt::Term| -> Result<(), Error> {
+    //         let var = self_term.as_var().ok_or(format!("expecting variable on the pattern side"))?;
+    //         assert!(!subst.contains_key(&var), "duplicate variable {} in the pattern", &var);
+    //         subst.insert(var, other_term.clone());
+    //         Ok(())
+    //     };
+
+    //     // Match mutable states
+    //     for name in self.ctx.muts.keys() {
+    //         let self_term = self.muts.get(name).ok_or(format!("undefined mutable"))?;
+    //         let other_term = config.muts.get(name).ok_or(format!("undefined mutable"))?;
+    //         match_terms(self_term, other_term)?;
+    //     }
+
+    //     // Match channel states
+    //     for name in self.ctx.chans.keys() {
+    //         let self_state = self.chans.get(name).ok_or(format!("undefined channel"))?;
+    //         let other_state = config.chans.get(name).ok_or(format!("undefined channel"))?;
+
+    //         if self_state.len() != other_state.len() {
+    //             return Ok(false);
+    //         }
+
+    //         for (self_term, other_term) in self_state.values().zip(other_state.values()) {
+    //             match_terms(self_term, other_term)?;
+    //         }
+    //     }
+
+    //     // Match process states
+    //     if self.procs.len() != config.procs.len() {
+    //         return Ok(false);
+    //     }
+
+    //     for (self_proc, other_proc) in self.procs.iter().zip(config.procs.iter()) {
+    //         match (self_proc, other_proc) {
+    //             (ProcState::Call(self_name, self_args), ProcState::Call(other_name, other_args)) if self_name == other_name =>
+    //                 for (self_term, other_term) in self_args.iter().zip(other_args.iter()) {
+    //                     match_terms(self_term, other_term)?;
+    //                 }
+    //             (ProcState::End, ProcState::End) => {}
+    //             _ => return Ok(false)
+    //         }
+    //     }
+
+    //     solver.push()?;
+    //     // Assert the negation of the substituted path condition
+    //     solver.assert(smt::TermX::not(smt::TermX::and(self.path_conditions.iter().map(|term| smt::TermX::substitute(term, &subst)))))?;
+    //     let result = solver.check_sat()?;
+    //     solver.pop()?;
+
+    //     Ok(result == smt::CheckSatResult::Unsat)
+    // }
 }
 
 impl PredicateX {
@@ -704,7 +762,6 @@ impl ModelChecker {
         if abs.extend(&mut self.smt_ctx, solver, &self.preds, &self.eqs, configs)? {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
-
             // println!("changed shape: {}", abs);
         }
 
@@ -751,10 +808,35 @@ impl ModelChecker {
                     .unwrap();
 
                 // Make one step
+                // NOTE: step_one_proc only explores one branch
+                // for soundness, we need to assume
+                // 1. The program is confluent (which can be checked using permissions)
+                // 2. The program is terminating (or in general that the deterministic schedule is fair)
+                //
+                // Otherwise the step_one_proc schedule may starve operators and the result is unsound.
+                // For general soundness, use step_all_proc, but its performance is bad
                 for result in abs_pattern.step_one_proc()? {
                     match result {
                         StepResult::Step(_, new_config) => {
                             self.smt_ctx.flush(solver)?;
+
+                            // let new_shape_idx = self.get_shape_index(&new_config)?;
+
+                            // let add_config = if self.shapes.contains_key(&new_shape_idx) {
+                            //     // If the shape already exists, add only if the new config is not subsumed by the shape
+                            //     !self.shapes[&new_shape_idx].pattern.as_ref().unwrap().subsume(solver, &new_config)?
+                            // } else {
+                            //     // Otherwise add only if the config is feasible
+                            //     new_config.feasible(solver)? != smt::CheckSatResult::Unsat
+                            // };
+
+                            // if add_config {
+                            //     if !new_configs.contains_key(&new_shape_idx) {
+                            //         new_configs.insert(new_shape_idx, Vec::new());
+                            //     }
+                            //     new_configs.get_mut(&new_shape_idx).unwrap().push(new_config);
+                            // }
+
                             if new_config.feasible(solver)? != smt::CheckSatResult::Unsat {
                                 // Found a feasible step
                                 let new_shape_idx = self.get_shape_index(&new_config)?;
