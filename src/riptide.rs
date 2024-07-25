@@ -478,7 +478,7 @@ impl Graph {
         Ok(Graph { params, chans, ops })
     }
 
-    fn channel_name(chan: &Channel) -> ChanName {
+    pub fn channel_name(chan: &Channel) -> ChanName {
         format!("C{}", chan.id()).into()
     }
 
@@ -1233,19 +1233,25 @@ impl Graph {
         self.gen_function_arguments(opts, &mut ctx)?;
         self.gen_channels(opts, &mut ctx)?;
 
-        // Generate entry point process
+        // Generate the Init process
         // which would push all constant, non-hold values
-        let mut entry_proc = ProcX::skip();
-
+        let mut init_proc = ProcX::skip();
+        let mut init_proc_res = vec![];
         for chan in &self.chans {
             if chan.is_constant() && !chan.is_hold() {
-                entry_proc = ProcX::send(
-                    Self::channel_name(chan),
+                let name = Self::channel_name(chan);
+                init_proc_res.push(ProcResourceX::output(&name));
+                init_proc = ProcX::send(
+                    name,
                     Self::const_channel_to_term(opts.word_width, chan),
-                    entry_proc,
+                    init_proc,
                 );
             }
         }
+        ctx.add_proc(&ProcDeclX::new("Init", [] as [ProcParam; 0], init_proc_res, init_proc))?;
+
+        // Generate the entry process
+        let mut entry_proc = ProcX::call("Init", [] as [Term; 0]);
 
         // Generate each operator
         for op in &self.ops {

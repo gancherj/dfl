@@ -57,6 +57,11 @@ pub struct PredSetX {
     pub preds: Vec<Predicate>,
 }
 
+#[derive(Debug)]
+pub struct ChanEquality {
+    pub chans: Vec<ChanName>,
+}
+
 pub struct ModelChecker {
     ctx: Rc<Ctx>,
     smt_ctx: smt::EncodingCtx,
@@ -66,6 +71,7 @@ pub struct ModelChecker {
     changed_shapes: IndexSet<ShapeIndex>,
 
     preds: PredSet,
+    eqs: Vec<ChanEquality>,
 
     // All reachable shapes
     shapes: HashMap<ShapeIndex, ShapeAbstraction>,
@@ -244,8 +250,12 @@ impl Configuration {
                     for (child, conditions) in out_edges.iter() {
                         if let Some(ancestor_idx) = ancestor.get_index_of(child) {
                             // Found a cycle
+                            println!("found a cycle, checking abstraction constraints and cycle condition");
+
                             // Check if the path condition from the ancestor all the way down is satisfiable
-                            let mut path_conditions = vec![smt::TermX::or(conditions)];
+                            let mut cycle_conditions = vec![smt::TermX::or(conditions)];
+
+                            println!("cycle condition ({} -> {}): {}", proc_name, child, cycle_conditions.last().unwrap());
 
                             // For each two adjacent ancestor from ancestor idx
                             // Collect the path condition between them
@@ -260,12 +270,17 @@ impl Configuration {
                                     .unwrap()
                                     .get(*ancestor2)
                                     .unwrap();
-                                path_conditions.push(smt::TermX::or(conditions));
+                                cycle_conditions.push(smt::TermX::or(conditions));
+                                println!("cycle condition ({} -> {}): {}", ancestor1, ancestor2, cycle_conditions.last().unwrap());
                             }
 
                             // Solve the path conditions for satisfiability
                             solver.push()?;
                             for condition in self.path_conditions.iter() {
+                                println!("path condition: {}", condition);
+                                solver.assert(condition)?;
+                            }
+                            for condition in cycle_conditions.iter() {
                                 solver.assert(condition)?;
                             }
                             let result = solver.check_sat()?;
@@ -493,6 +508,39 @@ impl ShapeAbstraction {
         Ok(validity)
     }
 
+    /// Update the path condition based on self.constraints
+    fn update_path_condition(&mut self, chan_eqs: &Vec<ChanEquality>) {
+        let pattern = self.pattern.as_mut().unwrap();
+
+        pattern.path_conditions =
+            self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
+
+        // Add equalities between channels
+        for eq in chan_eqs {
+            let chan_states = eq.chans.iter().map(|c| &pattern.chans[c]).collect::<Vec<_>>();
+            let mut i = 0;
+            loop {
+                // The i-th to the last value of each channel (if exists) should be equal
+                let sync_vars = chan_states.iter()
+                    .filter_map(|s| if s.len() > i { s.get(s.len() - i - 1) } else { None })
+                    .collect::<Vec<_>>();
+
+                if sync_vars.len() == 0 {
+                    break;
+                }
+
+                // Add equalities
+                for i in 0..sync_vars.len() {
+                    for j in 0..i {
+                        pattern.path_conditions.push_back(smt::TermX::eq(sync_vars[i], sync_vars[j]));
+                    }
+                }
+
+                i += 1;
+            }
+        }
+    }
+
     /**
      * Extend an abstraction with more examples
      * Return true iff the abstraction needs to be weakened
@@ -504,6 +552,7 @@ impl ShapeAbstraction {
         smt_ctx: &mut smt::EncodingCtx,
         solver: &mut smt::Solver,
         preds: &PredSet,
+        chan_eqs: &Vec<ChanEquality>,
         mut new_configs: Vec<Configuration>,
     ) -> Result<bool, Error> {
         if let Some(first_config) = new_configs.first() {
@@ -641,7 +690,7 @@ impl ShapeAbstraction {
             // If the original constraints are uninitialized, set them to the new ones
             if self.constraints.len() == 0 {
                 self.constraints = abs_constraints;
-                pattern.path_conditions = self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
+                self.update_path_condition(chan_eqs);
                 return Ok(true);
             }
 
@@ -655,7 +704,7 @@ impl ShapeAbstraction {
             }
 
             if changed {
-                pattern.path_conditions = self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
+                self.update_path_condition(chan_eqs);
                 return Ok(true);
             }
         }
@@ -676,7 +725,7 @@ impl ShapeAbstraction {
  * 2. Check if a symbolic configuration is subsumed by an abstraction
  */
 impl ModelChecker {
-    pub fn new(ctx: &Rc<Ctx>, preds: impl IntoIterator<Item = Predicate>) -> ModelChecker {
+    pub fn new(ctx: &Rc<Ctx>, preds: impl IntoIterator<Item = Predicate>, eqs: impl IntoIterator<Item = ChanEquality>) -> ModelChecker {
         ModelChecker {
             ctx: ctx.clone(),
             smt_ctx: smt::EncodingCtx::new("mc"),
@@ -684,6 +733,7 @@ impl ModelChecker {
             index_to_shape: Vec::new(),
             changed_shapes: IndexSet::new(),
             preds: Rc::new(PredSetX { preds: preds.into_iter().collect() }),
+            eqs: eqs.into_iter().collect(),
             shapes: HashMap::new(),
         }
     }
@@ -726,7 +776,7 @@ impl ModelChecker {
         }
 
         let abs = self.shapes.get_mut(&shape_idx).unwrap();
-        if abs.extend(&mut self.smt_ctx, solver, &self.preds, configs)? {
+        if abs.extend(&mut self.smt_ctx, solver, &self.preds, &self.eqs, configs)? {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
 

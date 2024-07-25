@@ -22,7 +22,7 @@ use clap::{command, Parser};
 use error::SpannedError;
 use execution::Configuration;
 use lalrpop_util::lalrpop_mod;
-use mc::{ModelChecker, PredicateX};
+use mc::{ChanEquality, ModelChecker, PredicateX};
 use riptide::TranslationOptions;
 use smt::SolverOptions;
 use span::{FilePath, Source};
@@ -88,8 +88,11 @@ struct Args {
 //     Ok(())
 // }
 
-fn type_check(args: Args) -> Result<(), Error> {
+fn type_check(mut args: Args) -> Result<(), Error> {
     let path: FilePath = args.source.into();
+
+    // Equality constraints when compiled from o2p
+    let mut chan_eqs = Vec::new();
 
     let ctx = match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
         // Parse from dfl source
@@ -112,6 +115,20 @@ fn type_check(args: Args) -> Result<(), Error> {
             let program: Program = (&ctx).into();
 
             println!("{}", program);
+
+            // Gather equalities between channels for model checking
+            // TODO: tidy this up
+            for op in graph.ops.iter() {
+                for chans in op.outputs.values() {
+                    // All channels connected to the same output port should be equal
+                    chan_eqs.push(ChanEquality {
+                        chans: chans.iter().map(|c| Graph::channel_name(c)).collect(),
+                    });
+
+                    println!("output equality: {}", chan_eqs.last().unwrap().chans.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" = "));
+                }
+            }
+
             Rc::new(ctx)
         }
 
@@ -135,8 +152,11 @@ fn type_check(args: Args) -> Result<(), Error> {
             // Rc::new(PredicateX { typ: TermTypeX::bool(), var: "x".into(), term: smt::TermX::var("x") }),
 
             // Whether an integer is 0 or not
-            Rc::new(PredicateX { typ: TermTypeX::int(), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::int(0)) }),
-        ]);
+            // Rc::new(PredicateX { typ: TermTypeX::int(), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::int(0)) }),
+
+            // Whether a BV32 is 0
+            Rc::new(PredicateX { typ: TermTypeX::bit_vec(32), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::bit_vec(0, 32)) }),
+        ], chan_eqs);
         let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
         solver.set_logic("ALL")?;
 
