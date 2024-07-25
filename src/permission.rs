@@ -285,7 +285,7 @@ impl PermissionX {
 
                 let perm_interp = interp.perms.get(v).ok_or(SpannedError::spanned(
                     &perm.span,
-                    format!("permission variable `{}` does not exist", v),
+                    format!("permission variable `{}` does not have an interpretation (to infer permissions, use --infer-perm)", v),
                 ))?;
 
                 Ok(smt::TermX::app_term(

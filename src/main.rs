@@ -43,9 +43,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     infer_perm: bool,
 
-    /// Run model checker
+    /// Run deadlock checker
     #[arg(long, default_value_t = false)]
-    mc: bool,
+    check_deadlock: bool,
 
     /// Enable array slices for permission inference
     #[arg(long, default_value_t = false)]
@@ -68,52 +68,51 @@ struct Args {
     #[arg(long)]
     max_grammar_size: Option<u32>,
 
-    // /// Path to the SMT solver
-    // #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
-    // solver: String,
-
-    // /// Options for the SMT solver
-    // #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "--no-interactive --incremental")]
-    // solver_flags: Vec<String>,
-
     /// Path to the SMT solver
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "z3")]
     solver: String,
 
     /// Options for the SMT solver
-    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "-in")]
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ')]
     solver_flags: Vec<String>,
 
     /// Log SMT commands into the given file
     #[arg(long)]
     log_smt: Option<String>,
+
+    /// Log compiled dfl program into the given file
+    #[arg(long)]
+    log_dfl: Option<String>,
 }
 
-// fn dfs(config: &Configuration) -> Result<(), Error> {
-//     for branch in config.step_one_proc()? {
-//         println!("stepped: {}", branch);
-//         match branch {
-//             execution::StepResult::Step(_, config) => dfs(&config)?,
-//             _ => {}
-//         }
-//     }
-//     Ok(())
-// }
+impl Args {
+    /// Generate a solver instance
+    fn gen_solver(&self) -> Result<smt::Solver, Error> {
+        let solver_options = SolverOptions {
+            log: match &self.log_smt {
+                Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
+                None => None,
+            },
+        };
+        Ok(smt::Solver::new(self.solver.clone(), &self.solver_flags, solver_options)?)
+    }
+}
 
-fn type_check(mut args: Args) -> Result<(), Error> {
-    let path: FilePath = args.source.into();
+/// Parse input file (in dfl or o2p), then return the context
+fn parse_input(args: &Args) -> Result<(Rc<Ctx>, Vec<ChanEquality>), Error> {
+    let path: FilePath = args.source.as_str().into();
 
     // Equality constraints when compiled from o2p
     let mut chan_eqs = Vec::new();
 
-    let ctx = match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
+    match Path::new(path.as_str()).extension().map(|s| s.as_bytes()) {
         // Parse from dfl source
         Some(b"dfl") => {
             let src: Source = fs::read_to_string(path.as_str())?.into();
             let program = syntax::ProgramParser::new()
                 .parse(&path, &src, src.as_str())
                 .map_err(|e| SpannedError::from_parse_error(&path, &src, e))?;
-            Rc::new(Ctx::from(&program)?)
+            Ok((Rc::new(Ctx::from(&program)?), Vec::new()))
         }
 
         // Translate from RipTide dataflow graph
@@ -121,12 +120,9 @@ fn type_check(mut args: Args) -> Result<(), Error> {
             let o2p_file = fs::File::open(path.as_str())?;
             let reader = BufReader::new(o2p_file);
             let graph = Graph::from_reader(reader)?;
-            println!("parsed: {:?}", graph);
+            // println!("parsed: {:?}", graph);
             // println!("{}", graph.to_program(32).unwrap());
             let ctx = graph.to_program(&TranslationOptions { word_width: 32 })?;
-            let program: Program = (&ctx).into();
-
-            println!("{}", program);
 
             // Gather equalities between channels for model checking
             // TODO: tidy this up
@@ -137,44 +133,66 @@ fn type_check(mut args: Args) -> Result<(), Error> {
                         chans: chans.iter().map(|c| Graph::channel_name(c)).collect(),
                     });
 
-                    println!("output equality: {}", chan_eqs.last().unwrap().chans.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" = "));
+                    // println!("output equality: {}", chan_eqs.last().unwrap().chans.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" = "));
                 }
             }
 
-            Rc::new(ctx)
+            Ok((Rc::new(ctx), chan_eqs))
         }
 
         _ => Err(format!("unknown extension {}", path))?,
-    };
+    }
+}
 
-    if args.check_perm && args.infer_perm {
-        Err("cannot set both --check-perm and --infer-perm".to_string())?;
+/// Run model checker for deadlocks
+fn deadlock_check(args: &Args, ctx: &Rc<Ctx>, chan_eqs: Vec<ChanEquality>) -> Result<(), Error> {
+    let mut mc = ModelChecker::new(&ctx, [
+        // Whether a boolean value is true or false
+        // Rc::new(PredicateX { typ: TermTypeX::bool(), var: "x".into(), term: smt::TermX::var("x") }),
+
+        // Whether an integer is 0 or not
+        // Rc::new(PredicateX { typ: TermTypeX::int(), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::int(0)) }),
+
+        // Whether a BV32 is 0
+        Rc::new(PredicateX { typ: TermTypeX::bit_vec(32), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::bit_vec(0, 32)) }),
+    ], chan_eqs);
+
+    let mut solver = args.gen_solver()?;
+    solver.set_logic("ALL")?;
+
+    for cmd in Configuration::gen_smt_prelude(&ctx)? {
+        // println!("{}", cmd);
+        solver.send_command(cmd)?;
     }
 
-    let solver_options = SolverOptions {
-        log: match &args.log_smt {
-            Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
-            None => None,
-        },
-    };
+    mc.compute_reachable_shapes(&mut solver, "Program", 1)?;
+
+    println!("==============================");
+    let cycle = mc.find_wait_cycle(&mut solver)?;
+    if let Some(cycle) = cycle {
+        println!(
+            "has wait cycle: {}",
+            cycle
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        );
+    } else {
+        println!("no cycles found");
+    }
+
+    Ok(())
+}
+
+/// Type check the context
+fn type_check(args: &Args, ctx: &Rc<Ctx>) -> Result<(), Error> {
+    let mut solver = args.gen_solver()?;
+    solver.set_logic("ALL")?;
 
     ctx.type_check(&mut if args.check_perm {
-        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
-        solver.set_logic("ALL")?;
         PermCheckMode::Check(solver)
     } else if args.infer_perm {
-        if args.solver == "cvc5" {
-            args.solver_flags
-                .extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
-
-            if let Some(size) = args.max_grammar_size {
-                args.solver_flags
-                    .extend(["--sygus-abort-size".to_string(), size.to_string()]);
-            }
-        }
-
-        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
-        solver.set_logic("ALL")?;
         PermCheckMode::Infer(
             solver,
             PermInferOptions {
@@ -186,63 +204,60 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         )
     } else {
         PermCheckMode::None
-    })?;
+    })
+}
 
-    if args.mc {
-        // TODO: test code for symbolic execution
-        // let mut smt_ctx = EncodingCtx::new("exec");
-        // let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
-        // println!("init config: {}", config);
-        // dfs(&config);
-        let solver_options = SolverOptions {
-            log: match &args.log_smt {
-                Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
-                None => None,
-            },
-        };
-        let mut mc = ModelChecker::new(&ctx, [
-            // Whether a boolean value is true or false
-            // Rc::new(PredicateX { typ: TermTypeX::bool(), var: "x".into(), term: smt::TermX::var("x") }),
+/// Check the arguments provided and make modifications if necessary
+fn check_args(args: &mut Args) -> Result<(), Error> {
+    if args.check_perm && args.infer_perm {
+        Err("cannot set both --check-perm and --infer-perm".to_string())?;
+    }
 
-            // Whether an integer is 0 or not
-            // Rc::new(PredicateX { typ: TermTypeX::int(), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::int(0)) }),
+    // Add additional flags for solvers
+    if args.solver == "cvc5" {
+        args.solver_flags
+            .extend(["--no-interactive", "--incremental"]
+                .map(|s| s.to_string()));
 
-            // Whether a BV32 is 0
-            Rc::new(PredicateX { typ: TermTypeX::bit_vec(32), var: "x".into(), term: smt::TermX::eq(smt::TermX::var("x"), smt::TermX::bit_vec(0, 32)) }),
-        ], chan_eqs);
-        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
-        solver.set_logic("ALL")?;
+        if args.infer_perm {
+            // Additional arguments for the SyGuS mode
+            args.solver_flags
+                .extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
 
-        for cmd in Configuration::gen_smt_prelude(&ctx)? {
-            // println!("{}", cmd);
-            solver.send_command(cmd)?;
+            if let Some(size) = args.max_grammar_size {
+                args.solver_flags
+                    .extend(["--sygus-abort-size".to_string(), size.to_string()]);
+            }
         }
+    } else if args.solver == "z3" {
+        args.solver_flags
+            .extend(["-in"]
+                .map(|s| s.to_string()));
 
-        mc.compute_reachable_shapes(&mut solver, "Program", 1)?;
-
-        println!("==============================");
-        let cycle = mc.find_wait_cycle(&mut solver)?;
-        if let Some(cycle) = cycle {
-            println!(
-                "has wait cycle: {}",
-                cycle
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            );
-        } else {
-            println!("no cycles found");
-        }
-
-        return Ok(());
+        assert!(!args.infer_perm, "SyGuS not supported by Z3; use CVC5 instead");
     }
 
     Ok(())
 }
 
+fn main_args(mut args: Args) -> Result<(), Error> {
+    check_args(&mut args)?;
+    let (ctx, chan_eqs) = parse_input(&args)?;
+
+    if let Some(log_dfl) = &args.log_dfl {
+        let program: Program = ctx.as_ref().into();
+        fs::write(log_dfl, program.to_string())?;
+    }
+
+    type_check(&args, &ctx)?;
+    if args.check_deadlock {
+        deadlock_check(&args, &ctx, chan_eqs)?;
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
-    match type_check(Args::parse()) {
+    match main_args(Args::parse()) {
         Ok(..) => ExitCode::from(0),
         Err(err) => {
             eprintln!("{}", err);

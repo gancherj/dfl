@@ -1195,18 +1195,25 @@ impl Ctx {
         for decl in self.procs.values() {
             let constraints = ProcDeclX::type_check(decl, self)?;
 
-            println!("permission constraints for `{}`:", decl.name);
+            if let PermCheckMode::None = mode {} else {
+                println!("permission constraints for `{}`:", decl.name);
+            }
+
             for constraint in &constraints {
-                // In check mode, we can check each permission constraint separately
-                if let PermCheckMode::Check(solver) = mode {
-                    if constraint.check_validity(self, solver)? {
-                        println!("  valid: {}", constraint)
-                    } else {
-                        println!("  not valid: {}", constraint);
-                        all_perm_valid = false;
+                match mode {
+                    PermCheckMode::Check(solver) => {
+                        // In check mode, we can check each permission constraint separately
+                        if constraint.check_validity(self, solver)? {
+                            println!("  valid: {}", constraint)
+                        } else {
+                            println!("  not valid: {}", constraint);
+                            all_perm_valid = false;
+                        }
                     }
-                } else {
-                    println!("  {}", constraint);
+                    PermCheckMode::Infer(..) => {
+                        println!("  {}", constraint);
+                    }
+                    PermCheckMode::None => {}
                 }
             }
 
