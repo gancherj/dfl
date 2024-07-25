@@ -146,6 +146,7 @@ pub enum TermX {
     BVASHR(Term, Term),
     BVLSHR(Term, Term),
     BVSHL(Term, Term),
+    BVFSHL(Term, Term, Term, BitVecWidth),
 
     BVAnd(Term, Term),
     BVOr(Term, Term),
@@ -600,6 +601,13 @@ impl TermTypeX {
         }
     }
 
+    pub fn bv_width(&self) -> Option<BitVecWidth> {
+        match self {
+            TermTypeX::Base(BaseType::BitVec(w)) => Some(*w),
+            _ => None,
+        }
+    }
+
     pub fn is_int_or_bv(&self) -> bool {
         match self {
             TermTypeX::Base(BaseType::Int) => true,
@@ -740,6 +748,10 @@ impl TermX {
         Spanned::new(TermX::BVSHL(t1.borrow().clone(), t2.borrow().clone()))
     }
 
+    pub fn bvfshl(t1: impl Borrow<Term>, t2: impl Borrow<Term>, t3: impl Borrow<Term>, w: BitVecWidth) -> Term {
+        Spanned::new(TermX::BVFSHL(t1.borrow().clone(), t2.borrow().clone(), t3.borrow().clone(), w))
+    }
+
     pub fn bvashr(t1: impl Borrow<Term>, t2: impl Borrow<Term>) -> Term {
         Spanned::new(TermX::BVASHR(t1.borrow().clone(), t2.borrow().clone()))
     }
@@ -861,6 +873,24 @@ impl TermX {
             TermX::BVSHL(t1, t2) => {
                 substitute_inplace!(term, TermX::BVSHL, TermX, t1, TermX, t2, subst)
             }
+            TermX::BVFSHL(t1, t2, t3, w) => {
+                let t1_subst = TermX::substitute_inplace(t1, subst);
+                let t2_subst = TermX::substitute_inplace(t2, subst);
+                let t3_subst = TermX::substitute_inplace(t3, subst);
+                if t1_subst.is_some() || t2_subst.is_some() || t3_subst.is_some() {
+                    Some(Spanned::spanned_option(
+                        &term.borrow().span,
+                        TermX::BVFSHL(
+                            t1_subst.unwrap_or(t1.clone()),
+                            t2_subst.unwrap_or(t2.clone()),
+                            t3_subst.unwrap_or(t3.clone()),
+                            *w,
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
             TermX::BVLSHR(t1, t2) => {
                 substitute_inplace!(term, TermX::BVLSHR, TermX, t1, TermX, t2, subst)
             }
@@ -922,6 +952,11 @@ impl TermX {
                 t1.free_vars_inplace(vars);
                 t2.free_vars_inplace(vars);
             }
+            TermX::BVFSHL(t1, t2, t3, _) => {
+                t1.free_vars_inplace(vars);
+                t2.free_vars_inplace(vars);
+                t3.free_vars_inplace(vars);
+            }
             TermX::Not(t) => {
                 t.free_vars_inplace(vars);
             }
@@ -948,6 +983,7 @@ impl TermX {
             | TermX::BVAdd(..)
             | TermX::BVSub(..)
             | TermX::BVSHL(..)
+            | TermX::BVFSHL(..)
             | TermX::BVASHR(..)
             | TermX::BVLSHR(..) => 2,
             TermX::Less(..)
@@ -1550,6 +1586,7 @@ impl fmt::Display for TermX {
             TermX::BVSLE(t1, t2) => term_op_format!(self, f, "s<=", t1, t2),
             TermX::BVSGE(t1, t2) => term_op_format!(self, f, "s>=", t1, t2),
             TermX::BVSHL(t1, t2) => term_op_format!(self, f, "<<", t1, t2),
+            TermX::BVFSHL(t1, t2, t3, w) => write!(f, "bvfshl({}, {}, {}, {})", t1, t2, t3, w),
             TermX::BVASHR(t1, t2) => term_op_format!(self, f, "a>>", t1, t2),
             TermX::BVLSHR(t1, t2) => term_op_format!(self, f, "l>>", t1, t2),
             TermX::BVAnd(t1, t2) => term_op_format!(self, f, "bvand", t1, t2),

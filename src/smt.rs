@@ -465,6 +465,30 @@ impl TermX {
         TermX::app("=", [a.borrow(), b.borrow()])
     }
 
+    pub fn eq_multiple(terms: impl IntoIterator<Item = impl Borrow<Term>>) -> Term {
+        TermX::app("=", terms)
+    }
+
+    pub fn bvextract(a: impl Borrow<Term>, lo: impl Borrow<Term>, hi: impl Borrow<Term>) -> Term {
+        TermX::app_term(TermX::app("_", [&TermX::var("extract"), hi.borrow(), lo.borrow()]), [a])
+    }
+
+    pub fn bvconcat(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
+        TermX::app("concat", [a.borrow(), b.borrow()])
+    }
+
+    /// a, b, c should all have the same width
+    pub fn bvfshl(a: impl Borrow<Term>, b: impl Borrow<Term>, c: impl Borrow<Term>, width: u32) -> Term {
+        TermX::bvextract(
+            TermX::bvshl(
+                TermX::bvconcat(a.borrow(), b.borrow()),
+                TermX::bvconcat(TermX::bit_vec(0, width), c.borrow()),
+            ),
+            TermX::int(width.into()),
+            TermX::int((2 * width - 1).into()),
+        )
+    }
+
     pub fn bvult(a: impl Borrow<Term>, b: impl Borrow<Term>) -> Term {
         TermX::app("bvult", [a.borrow(), b.borrow()])
     }
@@ -926,15 +950,13 @@ impl fmt::Display for TermX {
         match self {
             TermX::Var(v) => write!(f, "{}", v),
             TermX::Int(i) => write!(f, "{}", i),
-            TermX::BitVec(i, w) => write!(
-                f,
-                "#b{}",
-                (0..64)
-                    .map(|s| ((i >> s) & 1).to_string())
-                    .take(*w as usize)
-                    .rev()
-                    .collect::<String>()
-            ),
+            TermX::BitVec(i, w) => {
+                if w % 4 == 0 {
+                    write!(f, "#x{:01$x}", i, (w / 4) as usize)
+                } else {
+                    write!(f, "#b{:01$b}", i, *w as usize)
+                }
+            }
             TermX::Bool(b) => write!(f, "{}", b),
             TermX::App(id, args) => {
                 write!(f, "({}", id)?;

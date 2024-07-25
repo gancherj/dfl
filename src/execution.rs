@@ -358,6 +358,12 @@ impl Configuration {
                 self.eval_term(local, t1)?,
                 self.eval_term(local, t2)?,
             )),
+            TermX::BVFSHL(t1, t2, t3, w) => Ok(smt::TermX::bvfshl(
+                self.eval_term(local, t1)?,
+                self.eval_term(local, t2)?,
+                self.eval_term(local, t3)?,
+                *w,
+            )),
             TermX::BVASHR(t1, t2) => Ok(smt::TermX::bvashr(
                 self.eval_term(local, t1)?,
                 self.eval_term(local, t2)?,
@@ -615,12 +621,7 @@ impl Configuration {
      */
     pub fn feasible(&self, solver: &mut smt::Solver) -> Result<smt::CheckSatResult, Error> {
         solver.push()?;
-
-        for condition in self.path_conditions.iter() {
-            // println!("condition: {}", condition);
-            solver.assert(condition)?;
-        }
-
+        solver.assert(smt::TermX::and(&self.path_conditions))?;
         let result = solver.check_sat()?;
         solver.pop()?;
         Ok(result)

@@ -603,6 +603,24 @@ impl TermX {
                     SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
                 }
             }
+            TermX::BVFSHL(t1, t2, t3, w) => {
+                let typ1 = TermX::type_check(t1, ctx, local)?;
+                let typ2 = TermX::type_check(t2, ctx, local)?;
+                let typ3 = TermX::type_check(t3, ctx, local)?;
+                if typ1 == typ2 && typ2 == typ3 {
+                    if let Some(expected) = typ1.bv_width() {
+                        if expected == *w {
+                            Ok(typ1.clone())
+                        } else {
+                            SpannedError::spanned_err(&term.span, format!("incorrect width"))
+                        }
+                    } else {
+                        SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
+                    }
+                } else {
+                    SpannedError::spanned_err(&term.span, format!("incorrect subterm type"))
+                }
+            }
             TermX::Less(t1, t2) => {
                 let typ1 = TermX::type_check(t1, ctx, local)?;
                 let typ2 = TermX::type_check(t2, ctx, local)?;

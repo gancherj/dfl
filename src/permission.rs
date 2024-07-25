@@ -127,6 +127,12 @@ impl TermX {
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
             )),
+            TermX::BVFSHL(t1, t2, t3, w) => Ok(smt::TermX::bvfshl(
+                TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,
+                TermX::as_smt_term(t3, ctx, local, interp, defined_constraints)?,
+                *w,
+            )),
             TermX::BVASHR(t1, t2) => Ok(smt::TermX::bvashr(
                 TermX::as_smt_term(t1, ctx, local, interp, defined_constraints)?,
                 TermX::as_smt_term(t2, ctx, local, interp, defined_constraints)?,

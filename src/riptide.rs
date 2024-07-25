@@ -16,7 +16,7 @@ use crate::{
 pub type ChannelId = u32;
 pub type OperatorId = u32;
 pub type PortIndex = u32;
-pub type ConstValue = i32;
+pub type ConstValue = i64;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct RawFunArg {
@@ -150,6 +150,7 @@ pub enum OperatorKind {
     SLE,
     SGE,
     SHL,
+    FSHL,
     ASHR,
     LSHR,
     And,
@@ -211,6 +212,7 @@ impl OperatorKind {
             "ARITH_CFG_OP_SLE" => Ok(OperatorKind::SLE),
             "ARITH_CFG_OP_SGE" => Ok(OperatorKind::SGE),
             "ARITH_CFG_OP_SHL" => Ok(OperatorKind::SHL),
+            "ARITH_CFG_OP_FSHL" => Ok(OperatorKind::FSHL),
             "ARITH_CFG_OP_ASHR" => Ok(OperatorKind::ASHR),
             "ARITH_CFG_OP_LSHR" => Ok(OperatorKind::LSHR),
             "ARITH_CFG_OP_AND" => Ok(OperatorKind::And),
@@ -684,6 +686,7 @@ impl Graph {
                 | OperatorKind::SLE
                 | OperatorKind::SGE
                 | OperatorKind::SHL
+                | OperatorKind::FSHL
                 | OperatorKind::ASHR
                 | OperatorKind::LSHR
                 | OperatorKind::And
@@ -940,6 +943,20 @@ impl Graph {
             OperatorKind::SGE => pred_op_translation!(opts, op, ctx, name, res, bvsge),
 
             OperatorKind::SHL => arith_op_translation!(opts, op, ctx, name, res, bvshl),
+
+            // Funnel shift
+            OperatorKind::FSHL => {
+                ctx.add_proc(&riptide! {
+                    (opts, op)
+                    proc name; res =>
+                        recv a <= port 0;
+                        recv b <= port 1;
+                        recv c <= port 2;
+                        send TermX::bvfshl(TermX::var("a"), TermX::var("b"), TermX::var("c"), opts.word_width) => port 0;
+                        call name;
+                })?
+            }
+
             OperatorKind::ASHR => arith_op_translation!(opts, op, ctx, name, res, bvashr),
             OperatorKind::LSHR => arith_op_translation!(opts, op, ctx, name, res, bvlshr),
 
@@ -1286,6 +1303,7 @@ impl fmt::Display for OperatorKind {
             OperatorKind::SLE => write!(f, "SLE"),
             OperatorKind::SGE => write!(f, "SGE"),
             OperatorKind::SHL => write!(f, "SHL"),
+            OperatorKind::FSHL => write!(f, "FSHL"),
             OperatorKind::ASHR => write!(f, "ASHR"),
             OperatorKind::LSHR => write!(f, "LSHR"),
             OperatorKind::And => write!(f, "And"),

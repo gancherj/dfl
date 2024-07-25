@@ -12,6 +12,11 @@ use crate::error::Error;
 use crate::execution::*;
 use crate::smt;
 
+const MC_SMT_PREFIX: &str = "mc";
+const MC_SMT_SHAPE_MUT_PREFIX: &str = "m_";
+const MC_SMT_SHAPE_CHAN_PREFIX: &str = "c_";
+const MC_SMT_SHAPE_PROC_PREFIX: &str = "p_";
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 /**
  * Shape is an equivalence class of configurations
@@ -449,17 +454,12 @@ impl ShapeAbstraction {
                     .filter_map(|s| if s.len() > i { s.get(s.len() - i - 1) } else { None })
                     .collect::<Vec<_>>();
 
-                if sync_vars.len() == 0 {
+                if sync_vars.len() <= 1 {
                     break;
                 }
 
-                // Add equalities
-                for i in 0..sync_vars.len() {
-                    for j in 0..i {
-                        pattern.path_conditions.push_back(smt::TermX::eq(sync_vars[i], sync_vars[j]));
-                    }
-                }
-
+                // Add equality
+                pattern.path_conditions.push_back(smt::TermX::eq_multiple(sync_vars));
                 i += 1;
             }
         }
@@ -496,7 +496,7 @@ impl ShapeAbstraction {
 
                 for decl in ctx.muts.values() {
                     let ident = smt_ctx
-                        .fresh_const(format!("shape_mut_{}", decl.name), decl.typ.as_smt_sort());
+                        .fresh_const(format!("{}{}", MC_SMT_SHAPE_MUT_PREFIX, decl.name), decl.typ.as_smt_sort());
                     muts.insert(decl.name.clone(), smt::TermX::var(ident));
                 }
 
@@ -507,7 +507,7 @@ impl ShapeAbstraction {
                     // Generate placeholders for each channel value
                     for j in 0..self.shape.chans[i] {
                         let ident = smt_ctx.fresh_const(
-                            format!("shape_chan_{}_{}", decl.name, j),
+                            format!("{}{}_{}", MC_SMT_SHAPE_CHAN_PREFIX, decl.name, j),
                             decl.typ.as_smt_sort(),
                         );
                         state.push(smt::TermX::var(ident));
@@ -526,7 +526,7 @@ impl ShapeAbstraction {
                                 .iter()
                                 .map(|param| {
                                     let ident = smt_ctx.fresh_const(
-                                        format!("shape_proc_param_{}", param.name),
+                                        format!("{}{}", MC_SMT_SHAPE_PROC_PREFIX, param.name),
                                         param.typ.as_smt_sort(),
                                     );
                                     smt::TermX::var(ident)
@@ -653,7 +653,7 @@ impl ModelChecker {
     pub fn new(ctx: &Rc<Ctx>, preds: impl IntoIterator<Item = Predicate>, eqs: impl IntoIterator<Item = ChanEquality>) -> ModelChecker {
         ModelChecker {
             ctx: ctx.clone(),
-            smt_ctx: smt::EncodingCtx::new("mc"),
+            smt_ctx: smt::EncodingCtx::new(MC_SMT_PREFIX),
             shape_indices: HashMap::new(),
             index_to_shape: Vec::new(),
             changed_shapes: IndexSet::new(),
@@ -753,7 +753,7 @@ impl ModelChecker {
                 // Make one step
                 for result in abs_pattern.step_one_proc()? {
                     match result {
-                        StepResult::Step(fired, new_config) => {
+                        StepResult::Step(_, new_config) => {
                             self.smt_ctx.flush(solver)?;
                             if new_config.feasible(solver)? != smt::CheckSatResult::Unsat {
                                 // Found a feasible step
