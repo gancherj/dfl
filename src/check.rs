@@ -951,7 +951,7 @@ impl ProcX {
                     if args.len() != proc_decl.params.len() {
                         return SpannedError::spanned_err(
                             &k1.span,
-                            format!("mismatched number of arguments"),
+                            format!("mismatched number of arguments for call to `{}`", name),
                         );
                     }
 

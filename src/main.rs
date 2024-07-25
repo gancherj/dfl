@@ -43,6 +43,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     infer_perm: bool,
 
+    /// Run model checker
+    #[arg(long, default_value_t = false)]
+    mc: bool,
+
     /// Enable array slices for permission inference
     #[arg(long, default_value_t = false)]
     array_slices: bool,
@@ -135,7 +139,48 @@ fn type_check(mut args: Args) -> Result<(), Error> {
         _ => Err(format!("unknown extension {}", path))?,
     };
 
-    {
+    if args.check_perm && args.infer_perm {
+        Err("cannot set both --check-perm and --infer-perm".to_string())?;
+    }
+
+    let solver_options = SolverOptions {
+        log: match &args.log_smt {
+            Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
+            None => None,
+        },
+    };
+
+    ctx.type_check(&mut if args.check_perm {
+        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
+        solver.set_logic("ALL")?;
+        PermCheckMode::Check(solver)
+    } else if args.infer_perm {
+        if args.solver == "cvc5" {
+            args.solver_flags
+                .extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
+
+            if let Some(size) = args.max_grammar_size {
+                args.solver_flags
+                    .extend(["--sygus-abort-size".to_string(), size.to_string()]);
+            }
+        }
+
+        let mut solver = smt::Solver::new(args.solver.clone(), &args.solver_flags, solver_options)?;
+        solver.set_logic("ALL")?;
+        PermCheckMode::Infer(
+            solver,
+            PermInferOptions {
+                array_slices: args.array_slices,
+                use_ite: args.use_ite,
+                num_fractions: args.num_fractions,
+                perm_grammar: !args.no_perm_grammar,
+            },
+        )
+    } else {
+        PermCheckMode::None
+    })?;
+
+    if args.mc {
         // TODO: test code for symbolic execution
         // let mut smt_ctx = EncodingCtx::new("exec");
         // let config = Configuration::new(&mut smt_ctx, &ctx, "Program".to_string(), 1)?;
@@ -184,47 +229,6 @@ fn type_check(mut args: Args) -> Result<(), Error> {
 
         return Ok(());
     }
-
-    if args.check_perm && args.infer_perm {
-        Err("cannot set both --check-perm and --infer-perm".to_string())?;
-    }
-
-    let solver_options = SolverOptions {
-        log: match args.log_smt {
-            Some(log_path) => Some(BufWriter::new(fs::File::create(log_path)?)),
-            None => None,
-        },
-    };
-
-    ctx.type_check(&mut if args.check_perm {
-        let mut solver = smt::Solver::new(args.solver, &args.solver_flags, solver_options)?;
-        solver.set_logic("ALL")?;
-        PermCheckMode::Check(solver)
-    } else if args.infer_perm {
-        if args.solver == "cvc5" {
-            args.solver_flags
-                .extend(["--lang", "sygus", "--sygus-si", "use"].map(|s| s.to_string()));
-
-            if let Some(size) = args.max_grammar_size {
-                args.solver_flags
-                    .extend(["--sygus-abort-size".to_string(), size.to_string()]);
-            }
-        }
-
-        let mut solver = smt::Solver::new(args.solver, &args.solver_flags, solver_options)?;
-        solver.set_logic("ALL")?;
-        PermCheckMode::Infer(
-            solver,
-            PermInferOptions {
-                array_slices: args.array_slices,
-                use_ite: args.use_ite,
-                num_fractions: args.num_fractions,
-                perm_grammar: !args.no_perm_grammar,
-            },
-        )
-    } else {
-        PermCheckMode::None
-    })?;
 
     Ok(())
 }

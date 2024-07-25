@@ -1,5 +1,4 @@
 use core::fmt;
-use std::char;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -250,12 +249,12 @@ impl Configuration {
                     for (child, conditions) in out_edges.iter() {
                         if let Some(ancestor_idx) = ancestor.get_index_of(child) {
                             // Found a cycle
-                            println!("found a cycle, checking abstraction constraints and cycle condition");
+                            // println!("found a cycle, checking abstraction constraints and cycle conditions");
 
                             // Check if the path condition from the ancestor all the way down is satisfiable
                             let mut cycle_conditions = vec![smt::TermX::or(conditions)];
 
-                            println!("cycle condition ({} -> {}): {}", proc_name, child, cycle_conditions.last().unwrap());
+                            // println!("cycle condition ({} -> {}): {}", proc_name, child, cycle_conditions.last().unwrap());
 
                             // For each two adjacent ancestor from ancestor idx
                             // Collect the path condition between them
@@ -271,13 +270,13 @@ impl Configuration {
                                     .get(*ancestor2)
                                     .unwrap();
                                 cycle_conditions.push(smt::TermX::or(conditions));
-                                println!("cycle condition ({} -> {}): {}", ancestor1, ancestor2, cycle_conditions.last().unwrap());
+                                // println!("cycle condition ({} -> {}): {}", ancestor1, ancestor2, cycle_conditions.last().unwrap());
                             }
 
                             // Solve the path conditions for satisfiability
                             solver.push()?;
                             for condition in self.path_conditions.iter() {
-                                println!("path condition: {}", condition);
+                                // println!("path condition: {}", condition);
                                 solver.assert(condition)?;
                             }
                             for condition in cycle_conditions.iter() {
@@ -309,81 +308,6 @@ impl Configuration {
         }
 
         Ok(None)
-    }
-
-    /**
-     * Check if self subsumes the given config via syntactical matching
-     * For this to be complete, self must only have distinct variables in it.
-     * No expressions or constants are allowed in the configuration (except for the path condition)
-     */
-    fn subsume(&self, config: &Configuration) -> Result<Option<Subsumption>, Error> {
-        let mut subst = im::HashMap::new();
-
-        // A helper function to match up a variable in the pattern with the other term
-        // and collect the mapping to the substitution
-        let mut match_terms =
-            |self_term: &smt::Term, other_term: &smt::Term| -> Result<(), Error> {
-                let var = self_term
-                    .as_var()
-                    .ok_or(format!("expecting variable on the pattern side"))?;
-                assert!(
-                    !subst.contains_key(&var),
-                    "duplicate variable {} in the pattern",
-                    &var
-                );
-                subst.insert(var, other_term.clone());
-                Ok(())
-            };
-
-        // Match mutable states
-        for name in self.ctx.muts.keys() {
-            let self_term = self.muts.get(name).ok_or(format!("undefined mutable"))?;
-            let other_term = config.muts.get(name).ok_or(format!("undefined mutable"))?;
-            match_terms(self_term, other_term)?;
-        }
-
-        // Match channel states
-        for name in self.ctx.chans.keys() {
-            let self_state = self.chans.get(name).ok_or(format!("undefined channel"))?;
-            let other_state = config.chans.get(name).ok_or(format!("undefined channel"))?;
-
-            if self_state.len() != other_state.len() {
-                return Ok(None);
-            }
-
-            for (self_term, other_term) in self_state.values().zip(other_state.values()) {
-                match_terms(self_term, other_term)?;
-            }
-        }
-
-        // Match process states
-        if self.procs.len() != config.procs.len() {
-            return Ok(None);
-        }
-
-        for (self_proc, other_proc) in self.procs.iter().zip(config.procs.iter()) {
-            match (self_proc, other_proc) {
-                (
-                    ProcState::Call(self_name, self_args),
-                    ProcState::Call(other_name, other_args),
-                ) if self_name == other_name => {
-                    for (self_term, other_term) in self_args.iter().zip(other_args.iter()) {
-                        match_terms(self_term, other_term)?;
-                    }
-                }
-                (ProcState::End, ProcState::End) => {}
-                _ => return Ok(None),
-            }
-        }
-
-        // Substitute the path condition
-        let condition = self
-            .path_conditions
-            .iter()
-            .map(|term| smt::TermX::substitute(term, &subst))
-            .collect();
-
-        Ok(Some(Subsumption { subst, condition }))
     }
 }
 
@@ -553,7 +477,7 @@ impl ShapeAbstraction {
         solver: &mut smt::Solver,
         preds: &PredSet,
         chan_eqs: &Vec<ChanEquality>,
-        mut new_configs: Vec<Configuration>,
+        new_configs: Vec<Configuration>,
     ) -> Result<bool, Error> {
         if let Some(first_config) = new_configs.first() {
             // If there are any feasible configurations, continue
@@ -629,6 +553,7 @@ impl ShapeAbstraction {
                 self.pattern.as_mut().unwrap()
             };
 
+            // List of path conditions of each new configuration
             let path_conditions = new_configs.iter()
                 .map(|config| smt::TermX::and(&config.path_conditions))
                 .collect::<Vec<_>>();
@@ -780,7 +705,7 @@ impl ModelChecker {
             // Shape abstraction changed
             self.changed_shapes.insert(shape_idx);
 
-            println!("changed shape: {}", abs);
+            // println!("changed shape: {}", abs);
         }
 
         Ok(())
@@ -831,15 +756,15 @@ impl ModelChecker {
                         StepResult::Step(fired, new_config) => {
                             self.smt_ctx.flush(solver)?;
                             if new_config.feasible(solver)? != smt::CheckSatResult::Unsat {
-                                println!("fired process: {}", fired);
-
                                 // Found a feasible step
-                                let shape_idx = self.get_shape_index(&new_config)?;
+                                let new_shape_idx = self.get_shape_index(&new_config)?;
 
-                                if !new_configs.contains_key(&shape_idx) {
-                                    new_configs.insert(shape_idx, Vec::new());
+                                // println!("fired {}: {} -> {}", fired, self.index_to_shape[shape_idx], self.index_to_shape[new_shape_idx]);
+
+                                if !new_configs.contains_key(&new_shape_idx) {
+                                    new_configs.insert(new_shape_idx, Vec::new());
                                 }
-                                new_configs.get_mut(&shape_idx).unwrap().push(new_config);
+                                new_configs.get_mut(&new_shape_idx).unwrap().push(new_config);
                             } else {
                                 // Found an infeasible step
                                 // println!("infeasible step: {}", new_config);

@@ -1066,7 +1066,7 @@ impl Graph {
                     proc state1; res =>
                         recv a <= port 1;
                         send TermX::var("a") => port 0;
-                        call state1;
+                        call state2, TermX::var("a");
                 })?;
 
                 // Generate a new permission var for the second state
