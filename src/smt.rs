@@ -14,7 +14,6 @@ use std::rc::Rc;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
-use crate::error::Error;
 use crate::error::SolverError;
 use crate::BitVecWidth;
 
@@ -792,11 +791,12 @@ impl Solver {
     }
 
     pub fn send_command(&mut self, cmd: impl Borrow<Command>) -> SolverResult<()> {
+        let cmd_str = cmd.borrow().to_string();
         if let Some(log) = &mut self.options.log {
-            writeln!(log, "{}", cmd.borrow())?;
+            writeln!(log, "{}", cmd_str)?;
             log.flush()?;
         }
-        writeln!(self.stdin, "{}", cmd.borrow())?;
+        writeln!(self.stdin, "{}", cmd_str)?;
         Ok(())
     }
 
