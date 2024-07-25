@@ -177,7 +177,8 @@ impl Configuration {
 //  *
     pub fn gen_smt_prelude(ctx: &Ctx) -> Result<Vec<smt::Command>, Error> {
         let mut cmds = vec![
-            smt::CommandX::define_sort(SMT_ENCODING_REF_SORT, smt::SortX::bit_vec(32)),
+            // smt::CommandX::define_sort(SMT_ENCODING_REF_SORT, smt::SortX::bit_vec(32)),
+            smt::CommandX::declare_sort(SMT_ENCODING_REF_SORT, 0),
         ];
         let ref_sort = smt::SortX::id(SMT_ENCODING_REF_SORT);
 

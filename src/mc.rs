@@ -1,9 +1,9 @@
 use core::fmt;
-use std::collections::HashSet;
 use std::hash::Hash;
 use std::rc::Rc;
 
 use im::Vector;
+use indexmap::indexset;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 
@@ -32,7 +32,7 @@ type ShapeIndex = usize;
 struct ShapeAbstraction {
     shape: Rc<Shape>,
     pattern: Option<Configuration>,
-    constraints: Vec<AbsConstraint>, // preds satisfied by each variable in the pattern
+    constraints: Option<Vec<AbsConstraint>>, // preds satisfied by each variable in the pattern
 }
 
 struct AbsConstraint {
@@ -72,7 +72,6 @@ pub struct ModelChecker {
 
     shape_indices: HashMap<Rc<Shape>, ShapeIndex>,
     index_to_shape: Vec<Rc<Shape>>,
-    changed_shapes: IndexSet<ShapeIndex>,
 
     preds: PredSet,
     eqs: Vec<ChanEquality>,
@@ -163,6 +162,7 @@ impl Configuration {
                     match result {
                         ProcEvalResult::Full(..) => {} // not stuck, no dependency
                         ProcEvalResult::Partial(rem, _, path_conditions) => {
+                            // println!("{} {}", proc_name, rem);
                             let owner = match &rem.x {
                                 // Blocked on send, want to find the owner of input of the channel
                                 ProcX::Send(chan, ..) => in_chan_owners.get(chan),
@@ -196,16 +196,6 @@ impl Configuration {
         Ok(WaitDependencyGraph { edges })
     }
 
-    /// Get the first non-skip process state
-    fn get_first_live_process(&self) -> Option<&ProcName> {
-        for proc_state in &self.procs {
-            if let ProcState::Call(proc_name, ..) = proc_state {
-                return Some(proc_name);
-            }
-        }
-        None
-    }
-
     /**
      * Given a (symbolic) configuration, check if there
      * is a wait cycle between processes
@@ -219,33 +209,31 @@ impl Configuration {
         // Find a cycle (with satisfiable path conditions) using dfs
         let mut stack = Vector::new();
 
-        let mut visited = HashSet::new(); // visited nodes with no cycles
+        let mut unvisited = self.procs.iter().filter_map(|s| match s {
+            ProcState::Call(name, ..) => Some(name.clone()),
+            ProcState::End => None,
+        }).collect::<IndexSet<_>>(); // unvisited nodes
         let mut ancestor = IndexSet::new(); // ancestors for the current node
 
-        // Get the first non-skip process state
-        if let Some(name) = self.get_first_live_process() {
-            stack.push_back(name);
-        } else {
-            // No live processes, so no possible cycles
-            return Ok(None);
-        }
+        while let Some(proc_name) = unvisited.pop() {
+            // Still some unvisited processes
+            stack.push_back(proc_name);
 
-        loop {
-            if let Some(proc_name) = stack.pop_back() {
-                if ancestor.contains(proc_name) {
+            while let Some(proc_name) = stack.pop_back() {
+                if ancestor.contains(&proc_name) {
                     assert!(ancestor.last() == Some(&proc_name));
-                    ancestor.shift_remove(proc_name);
-                    visited.insert(proc_name);
+                    ancestor.shift_remove(&proc_name);
+                    unvisited.shift_remove(&proc_name);
                     continue;
                 } else {
-                    ancestor.insert(proc_name);
+                    ancestor.insert(proc_name.clone());
                     // visit the node again to remove ancestor tag
                     // once all children are visited
-                    stack.push_back(proc_name);
+                    stack.push_back(proc_name.clone());
                 }
 
                 // If any children points to an ancestor node, we found a cycle
-                if let Some(out_edges) = wait_dep.edges.get(proc_name) {
+                if let Some(out_edges) = wait_dep.edges.get(&proc_name) {
                     for (child, conditions) in out_edges.iter() {
                         if let Some(ancestor_idx) = ancestor.get_index_of(child) {
                             // Found a cycle
@@ -265,9 +253,9 @@ impl Configuration {
                             {
                                 let conditions = wait_dep
                                     .edges
-                                    .get(*ancestor1)
+                                    .get(ancestor1)
                                     .unwrap()
-                                    .get(*ancestor2)
+                                    .get(ancestor2)
                                     .unwrap();
                                 cycle_conditions.push(smt::TermX::or(conditions));
                                 // println!("cycle condition ({} -> {}): {}", ancestor1, ancestor2, cycle_conditions.last().unwrap());
@@ -296,17 +284,16 @@ impl Configuration {
                                 ));
                             }
                             // Otherwise, we found a infeasible cycle
-                            println!("infeasible cycle")
+                            // println!("infeasible cycle")
                         } else {
-                            stack.push_back(child);
+                            stack.push_back(child.clone());
                         }
                     }
                 }
-            } else {
-                break;
             }
         }
 
+        // All processes visited and found no cycles
         Ok(None)
     }
 
@@ -431,7 +418,7 @@ impl ShapeAbstraction {
         ShapeAbstraction {
             shape: shape.clone(),
             pattern: None,
-            constraints: Vec::new(),
+            constraints: None,
         }
     }
 
@@ -500,7 +487,7 @@ impl ShapeAbstraction {
         let pattern = self.pattern.as_mut().unwrap();
 
         pattern.path_conditions =
-            self.constraints.iter().map(|c| c.as_smt()).flatten().collect();
+            self.constraints.as_ref().unwrap().iter().map(|c| c.as_smt()).flatten().collect();
 
         // Add equalities between channels
         for eq in chan_eqs {
@@ -669,24 +656,23 @@ impl ShapeAbstraction {
 
             // Compare the new abs_constraints with the old one
             // If changed, update path conditions and return true
-
-            // If the original constraints are uninitialized, set them to the new ones
-            if self.constraints.len() == 0 {
-                self.constraints = abs_constraints;
-                self.update_path_condition(chan_eqs);
-                return Ok(true);
-            }
-
-            // Otherwise merge the constraints
-            assert!(self.constraints.len() == abs_constraints.len());
-            let mut changed = false;
-            for (old, new) in self.constraints.iter_mut().zip(abs_constraints.iter()) {
-                if old.merge(new) {
-                    changed = true;
+            if let Some(old_constraints) = &mut self.constraints {
+                // Merge constraints
+                assert!(old_constraints.len() == abs_constraints.len());
+                let mut changed = false;
+                for (old, new) in old_constraints.iter_mut().zip(abs_constraints.iter()) {
+                    if old.merge(new) {
+                        changed = true;
+                    }
                 }
-            }
 
-            if changed {
+                if changed {
+                    self.update_path_condition(chan_eqs);
+                    return Ok(true);
+                }
+            } else {
+                // Set initial constraints
+                self.constraints = Some(abs_constraints);
                 self.update_path_condition(chan_eqs);
                 return Ok(true);
             }
@@ -714,7 +700,6 @@ impl ModelChecker {
             smt_ctx: smt::EncodingCtx::new(MC_SMT_PREFIX),
             shape_indices: HashMap::new(),
             index_to_shape: Vec::new(),
-            changed_shapes: IndexSet::new(),
             preds: Rc::new(PredSetX { preds: preds.into_iter().collect() }),
             eqs: eqs.into_iter().collect(),
             shapes: HashMap::new(),
@@ -750,7 +735,7 @@ impl ModelChecker {
         solver: &mut smt::Solver,
         shape_idx: ShapeIndex,
         configs: Vec<Configuration>,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if !self.shapes.contains_key(&shape_idx) {
             self.shapes.insert(
                 shape_idx,
@@ -759,13 +744,8 @@ impl ModelChecker {
         }
 
         let abs = self.shapes.get_mut(&shape_idx).unwrap();
-        if abs.extend(&mut self.smt_ctx, solver, &self.preds, &self.eqs, configs)? {
-            // Shape abstraction changed
-            self.changed_shapes.insert(shape_idx);
-            // println!("changed shape: {}", abs);
-        }
 
-        Ok(())
+        abs.extend(&mut self.smt_ctx, solver, &self.preds, &self.eqs, configs)
     }
 
     /**
@@ -782,22 +762,20 @@ impl ModelChecker {
         let init_shape_idx = self.get_shape_index(&init_config)?;
         self.extend_shape(solver, init_shape_idx, vec![init_config])?;
 
+        let mut changed_shapes = indexset! { init_shape_idx };
+
         // Iterate until no more changes in the shape abstraction
-        while self.changed_shapes.len() > 0 {
+        while changed_shapes.len() > 0 {
             println!(
                 "all shapes: {}, changed shapes: {}",
                 self.shapes.len(),
-                self.changed_shapes.len()
+                changed_shapes.len()
             );
-
-            // Pop all changed shapes
-            let old_changed_shapes = self.changed_shapes.iter().cloned().collect::<Vec<_>>();
-            self.changed_shapes.clear();
 
             let mut new_configs = IndexMap::new();
 
             // Step all changed shapes to get new configurations
-            for shape_idx in old_changed_shapes {
+            for shape_idx in &changed_shapes {
                 // Get the abstraction pattern
                 let abs_pattern = self
                     .shapes
@@ -858,8 +836,11 @@ impl ModelChecker {
             }
 
             // Add new configurations to the shape abstraction
+            changed_shapes.clear();
             for (shape_idx, configs) in new_configs {
-                self.extend_shape(solver, shape_idx, configs)?;
+                if self.extend_shape(solver, shape_idx, configs)? {
+                    changed_shapes.insert(shape_idx);
+                }
             }
         }
 
