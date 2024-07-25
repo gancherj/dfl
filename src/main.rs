@@ -68,12 +68,20 @@ struct Args {
     #[arg(long)]
     max_grammar_size: Option<u32>,
 
+    // /// Path to the SMT solver
+    // #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
+    // solver: String,
+
+    // /// Options for the SMT solver
+    // #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "--no-interactive --incremental")]
+    // solver_flags: Vec<String>,
+
     /// Path to the SMT solver
-    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "cvc5")]
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "z3")]
     solver: String,
 
     /// Options for the SMT solver
-    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "--no-interactive --incremental")]
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "-in")]
     solver_flags: Vec<String>,
 
     /// Log SMT commands into the given file
