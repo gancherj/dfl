@@ -60,6 +60,14 @@ pub struct SortDeclX {
     pub arity: usize,
 }
 
+pub type SortDefn = Rc<SortDefnX>;
+#[derive(Debug)]
+pub struct SortDefnX {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    pub sort: Sort,
+}
+
 pub type VarDecl = Rc<VarDeclX>;
 #[derive(Debug)]
 pub struct VarDeclX {
@@ -126,6 +134,7 @@ pub enum CommandX {
     Push,
     Pop,
     DeclareSort(SortDecl),
+    DefineSort(SortDefn),
     DeclareConst(VarDecl),
     DeclareFun(FunDecl),
     DefineFun(FunDefn),
@@ -664,6 +673,15 @@ impl CommandX {
         })))
     }
 
+    /// Define a non-parametric sort
+    pub fn define_sort(id: impl Into<Ident>, sort: impl Borrow<Sort>) -> Command {
+        Rc::new(CommandX::DefineSort(Rc::new(SortDefnX {
+            name: id.into(),
+            params: Vec::new(),
+            sort: sort.borrow().clone(),
+        })))
+    }
+
     pub fn declare_const(id: impl Into<Ident>, sort: impl Borrow<Sort>) -> Command {
         Rc::new(CommandX::DeclareConst(Rc::new(VarDeclX {
             name: id.into(),
@@ -1076,12 +1094,33 @@ impl fmt::Display for SynthFunDeclX {
     }
 }
 
+impl fmt::Display for SortDeclX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.name, self.arity)
+    }
+}
+
+impl fmt::Display for SortDefnX {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} (", self.name)?;
+        for (i, param) in self.params.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}", param)?;
+            } else {
+                write!(f, " {}", param)?;
+            }
+        }
+        write!(f, ") {}", self.sort)
+    }
+}
+
 impl fmt::Display for CommandX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CommandX::Push => write!(f, "(push)"),
-            CommandX::Pop => write!(f, "(pop)"),
-            CommandX::DeclareSort(decl) => write!(f, "(declare-sort {} {})", decl.name, decl.arity),
+            CommandX::Push => write!(f, "(push 1)"),
+            CommandX::Pop => write!(f, "(pop 1)"),
+            CommandX::DeclareSort(decl) => write!(f, "(declare-sort {})", decl),
+            CommandX::DefineSort(defn) => write!(f, "(define-sort {})", defn),
             CommandX::DeclareConst(decl) => write!(f, "(declare-const {})", decl),
             CommandX::DeclareFun(decl) => write!(f, "(declare-fun {})", decl),
             CommandX::DefineFun(defn) => write!(f, "(define-fun {})", defn),

@@ -76,6 +76,10 @@ struct Args {
     #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ')]
     solver_flags: Vec<String>,
 
+    // Logic used by the solver
+    #[clap(long, value_parser, num_args = 0.., value_delimiter = ' ', default_value = "ALL")]
+    solver_logic: String,
+
     /// Log SMT commands into the given file
     #[arg(long)]
     log_smt: Option<String>,
@@ -94,7 +98,9 @@ impl Args {
                 None => None,
             },
         };
-        Ok(smt::Solver::new(self.solver.clone(), &self.solver_flags, solver_options)?)
+        let mut solver = smt::Solver::new(self.solver.clone(), &self.solver_flags, solver_options)?;
+        solver.set_logic(self.solver_logic.clone())?;
+        Ok(solver)
     }
 }
 
@@ -158,7 +164,6 @@ fn deadlock_check(args: &Args, ctx: &Rc<Ctx>, chan_eqs: Vec<ChanEquality>) -> Re
     ], chan_eqs);
 
     let mut solver = args.gen_solver()?;
-    solver.set_logic("ALL")?;
 
     for cmd in Configuration::gen_smt_prelude(&ctx)? {
         // println!("{}", cmd);
@@ -187,8 +192,7 @@ fn deadlock_check(args: &Args, ctx: &Rc<Ctx>, chan_eqs: Vec<ChanEquality>) -> Re
 
 /// Type check the context
 fn type_check(args: &Args, ctx: &Rc<Ctx>) -> Result<(), Error> {
-    let mut solver = args.gen_solver()?;
-    solver.set_logic("ALL")?;
+    let solver = args.gen_solver()?;
 
     ctx.type_check(&mut if args.check_perm {
         PermCheckMode::Check(solver)
