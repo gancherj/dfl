@@ -160,7 +160,7 @@ pub enum TermX {
 pub type Proc = RcSpanned<ProcX>;
 #[derive(Debug)]
 pub enum ProcX {
-    Skip,
+    Stop,
     Send(ChanName, Term, Proc),
     Recv(ChanName, Var, Proc),
     Write(MutReference, Term, Proc),
@@ -1151,7 +1151,7 @@ impl MutReferenceX {
 
 impl ProcX {
     pub fn skip() -> Proc {
-        Spanned::new(ProcX::Skip)
+        Spanned::new(ProcX::Stop)
     }
 
     pub fn send(c: impl Into<ChanName>, t: impl Borrow<Term>, p: impl Borrow<Proc>) -> Proc {
@@ -1211,7 +1211,7 @@ impl ProcX {
         subst: &mut IndexMap<Var, Term>,
     ) -> Option<Proc> {
         match &proc.borrow().x {
-            ProcX::Skip => None,
+            ProcX::Stop => None,
             ProcX::Send(c, t, p) => {
                 let t_subst = TermX::substitute_inplace(t, subst);
                 let p_subst = Self::substitute_inplace(p, subst);
@@ -1754,7 +1754,7 @@ impl fmt::Display for ProcResourceX {
 impl fmt::Display for ProcX {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ProcX::Skip => write!(f, "skip"),
+            ProcX::Stop => write!(f, "skip"),
             ProcX::Send(c, t, p) => write!(f, "send {} -> {}; {}", t, c, p),
             ProcX::Recv(c, v, p) => write!(f, "recv {} <- {}; {}", v, c, p),
             ProcX::Write(m, t, p) => write!(f, "write {} -> {}; {}", t, m, p),

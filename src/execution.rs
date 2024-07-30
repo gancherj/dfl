@@ -164,17 +164,6 @@ impl Configuration {
      *
      * This should only be called once for each context
      */
-
-//      * We have overloaded functions (for any T in { Int, BV })
-//  * (declare-fun ref_index (Ref T) Ref)
-//  * (declare-fun ref_offset (Ref T) Ref)
-//  *
-//  * (declare-fun ref_read (<all mutables> Ref) T)
-//  *
-//  * For each mutable M
-//  * (declare-fun ref_write_M (<all mutables> Ref T) <type of M>)
-//  * (declare-const ref_base_M Ref)
-//  *
     pub fn gen_smt_prelude(ctx: &Ctx) -> Result<Vec<smt::Command>, Error> {
         let mut cmds = vec![
             // smt::CommandX::define_sort(SMT_ENCODING_REF_SORT, smt::SortX::bit_vec(32)),
@@ -271,7 +260,7 @@ impl Configuration {
      */
     fn decompose_parallels(&self, proc: &Proc) -> Result<Vector<ProcState>, SpannedError> {
         match &proc.x {
-            ProcX::Skip => Ok(Vector::new()),
+            ProcX::Stop => Ok(Vector::new()),
             ProcX::Call(name, args) => Ok(vector![ProcState::Call(
                 name.clone(),
                 args.iter()
@@ -509,7 +498,7 @@ impl Configuration {
         proc: &Proc,
     ) -> Result<Vector<ProcEvalResult>, Error> {
         match &proc.x {
-            ProcX::Skip => Ok(vector![ProcEvalResult::Full(ProcState::End, self)]),
+            ProcX::Stop => Ok(vector![ProcEvalResult::Full(ProcState::End, self)]),
 
             ProcX::Send(name, term, cont) => {
                 let value = self.eval_term(local, term)?;

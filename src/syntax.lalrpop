@@ -188,14 +188,14 @@ Term: Term = {
 ProcReset = <Proc>;
 Proc: Proc = {
     #[precedence(level = "0")]
-    <start:@L> "skip" ";"? <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Skip),
-    <start:@L> "send" <t:Term> "->" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "recv" <x:Var> "<-" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "write" <t:Term> "->" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Skip)))),
-    <start:@L> "read" <x:Var> "<-" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Skip)))),
+    <start:@L> "skip" ";"? <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Stop),
+    <start:@L> "send" <t:Term> "->" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Send(c, t, k.unwrap_or(Spanned::new(ProcX::Stop)))),
+    <start:@L> "recv" <x:Var> "<-" <c:ChanName> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Recv(c, x, k.unwrap_or(Spanned::new(ProcX::Stop)))),
+    <start:@L> "write" <t:Term> "->" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Write(m, t, k.unwrap_or(Spanned::new(ProcX::Stop)))),
+    <start:@L> "read" <x:Var> "<-" <m:MutReference> ";"? <end:@R> <k:Proc?> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Read(m, x, k.unwrap_or(Spanned::new(ProcX::Stop)))),
 
     <start:@L> "if" <t:Term> "then" <k1:Proc> "else" <k2:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k1, k2)),
-    <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Skip))),
+    <start:@L> "if" <t:Term> "then" <k:Proc> "end" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Ite(t, k, Spanned::new(ProcX::Stop))),
     <start:@L> <p:ProcName> "(" <args:CommaSep<Term>> ")" <end:@R> => Spanned::spanned(path.clone(), src.clone(), start, end, ProcX::Call(p, args.into())),
 
     "(" <p:ProcReset> ")" => p,

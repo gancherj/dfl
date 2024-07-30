@@ -8,6 +8,7 @@ use std::{fs, io::BufReader};
 pub mod ast;
 pub mod check;
 pub mod error;
+pub mod domain;
 pub mod execution;
 pub mod mc;
 pub mod permission;
@@ -19,6 +20,7 @@ use crate::error::Error;
 use crate::{ast::*, check::PermCheckMode, permission::PermInferOptions, riptide::Graph};
 
 use clap::{command, Parser};
+use domain::BVZeroDomain;
 use error::SpannedError;
 use execution::Configuration;
 use lalrpop_util::lalrpop_mod;
@@ -46,6 +48,9 @@ struct Args {
     /// Run deadlock checker
     #[arg(long, default_value_t = false)]
     check_deadlock: bool,
+
+    #[arg(long, default_value_t = false)]
+    check_deadlock_new: bool,
 
     /// Enable array slices for permission inference
     #[arg(long, default_value_t = false)]
@@ -190,6 +195,14 @@ fn deadlock_check(args: &Args, ctx: &Rc<Ctx>, chan_eqs: Vec<ChanEquality>) -> Re
     Ok(())
 }
 
+fn deadlock_check_new(_: &Args, ctx: &Rc<Ctx>) -> Result<(), Error> {
+    let mut domain = BVZeroDomain {};
+    let config = domain::Configuration::new(&ctx, &mut domain, "Program", 1)?;
+    println!("init: {}", config);
+    config.check_deadlock(&mut domain)?;
+    Ok(())
+}
+
 /// Type check the context
 fn type_check(args: &Args, ctx: &Rc<Ctx>) -> Result<(), Error> {
     let solver = args.gen_solver()?;
@@ -257,6 +270,11 @@ fn main_args(mut args: Args) -> Result<(), Error> {
     if args.check_deadlock {
         deadlock_check(&args, &ctx, chan_eqs)?;
     }
+
+    if args.check_deadlock_new {
+        deadlock_check_new(&args, &ctx)?;
+    }
+
     Ok(())
 }
 

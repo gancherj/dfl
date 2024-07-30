@@ -33,6 +33,7 @@ struct ShapeAbstraction {
     shape: Rc<Shape>,
     pattern: Option<Configuration>,
     constraints: Option<Vec<AbsConstraint>>, // preds satisfied by each variable in the pattern
+    count: usize, // number of feasible configs added to the shape
 }
 
 struct AbsConstraint {
@@ -419,6 +420,7 @@ impl ShapeAbstraction {
             shape: shape.clone(),
             pattern: None,
             constraints: None,
+            count: 0,
         }
     }
 
@@ -503,7 +505,14 @@ impl ShapeAbstraction {
                     break;
                 }
 
-                // Add equality
+                // Add equality of predicates
+                // for pred in &preds.preds {
+                //     if pred.typ == ctx.chans[&eq.chans[0]].typ {
+                //         pattern.path_conditions.push_back(smt::TermX::eq_multiple(sync_vars.iter().map(|v| pred.app(v))));
+                //     }
+                // }
+
+                // Add direct equality
                 pattern.path_conditions.push_back(smt::TermX::eq_multiple(sync_vars));
                 i += 1;
             }
@@ -767,9 +776,10 @@ impl ModelChecker {
         // Iterate until no more changes in the shape abstraction
         while changed_shapes.len() > 0 {
             println!(
-                "all shapes: {}, changed shapes: {}",
+                "all shapes: {}, changed shapes: {}, mean shape count: {}",
                 self.shapes.len(),
-                changed_shapes.len()
+                changed_shapes.len(),
+                self.shapes.values().map(|s| s.count).sum::<usize>() as f64 / self.shapes.len() as f64,
             );
 
             let mut new_configs = IndexMap::new();
@@ -838,7 +848,9 @@ impl ModelChecker {
             // Add new configurations to the shape abstraction
             changed_shapes.clear();
             for (shape_idx, configs) in new_configs {
+                let len = configs.len();
                 if self.extend_shape(solver, shape_idx, configs)? {
+                    self.shapes.get_mut(&shape_idx).unwrap().count += len;
                     changed_shapes.insert(shape_idx);
                 }
             }

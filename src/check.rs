@@ -743,7 +743,7 @@ impl ProcX {
         constraints: &mut Vector<PermJudgment>,
     ) -> Result<(), SpannedError> {
         match &proc.x {
-            ProcX::Skip => Ok(()),
+            ProcX::Stop => Ok(()),
             ProcX::Send(c, t, k) => {
                 let chan_decl = ctx.chans.get(c).ok_or(SpannedError::spanned(
                     &proc.span,
